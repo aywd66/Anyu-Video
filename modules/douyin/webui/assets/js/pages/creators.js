@@ -445,7 +445,7 @@
   function moreRow(act, icon, label, desc, danger) {
     return (
       '<button class="btn btn--ghost" data-more-act="' + act + '" style="justify-content:flex-start;' +
-      (danger ? 'color:var(--red);border-color:rgba(224,83,107,.4)' : '') + '">' +
+      (danger ? 'color:var(--red);border-color:var(--bb-danger-border)' : '') + '">' +
       I.icon(icon, 15) + '<span class="grow" style="text-align:left">' + esc(label) +
       '<span class="small faint" style="display:block;font-weight:400">' + esc(desc) + '</span></span>' +
       I.icon('chevronRight', 14) + '</button>'

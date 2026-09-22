@@ -1,53 +1,111 @@
 /* ============================================================
  * tokens.css — 设计变量（全站唯一取色/取尺寸来源）
  * ------------------------------------------------------------
- * ★ 改主题 = 只改这个文件。
- *   色板取自官方桌面端参考截图（深色紫黑底 + 抖音品红/青双色）。
- *   间距系统为 8pt 网格（4/8/12/16/24/32/48/64）。
- *   想做浅色主题：在 [data-theme="light"] 里覆盖同名变量即可。
+ * ★ v2 已切换为「方案C-明亮商务风」UI 套件（DELIVERY/ui-kit-bright-business）。
+ *   套件原生变量以 --bb-* 前缀定义；下方旧变量名保留为别名，
+ *   全部指向套件取值 —— 既有 CSS/JS 内联引用无需改动即换肤。
+ *   间距 8pt 网格与旧版一致；字体改用套件系统字体栈。
  * ============================================================ */
 :root {
+  /* ====== 套件原生变量（bright-business） ====== */
+  --bb-bg: #FAF9F6;
+  --bb-card: #FFFFFF;
+  --bb-input-bg: #F8FAFC;
+  --bb-border: #E2E8F0;
+  --bb-border-soft: #F1F5F9;
+  --bb-hover-teal: #99F6E4;
+
+  --bb-primary: #0D9488;
+  --bb-primary-dark: #0F766E;
+  --bb-primary-light: #F0FDFA;
+  --bb-primary-grad: linear-gradient(135deg, #0D9488, #2DD4BF);
+
+  --bb-accent: #F97316;
+  --bb-accent-dark: #EA580C;
+  --bb-accent-soft: #FFF7ED;
+
+  --bb-success: #059669;
+  --bb-success-soft: #ECFDF5;
+  --bb-danger: #E11D48;
+  --bb-danger-soft: #FFF1F2;
+  --bb-danger-border: #FBCFE8;
+  --bb-warning: #D97706;
+  --bb-warning-soft: #FFFBEB;
+
+  --bb-text: #334155;
+  --bb-text-strong: #0F172A;
+  --bb-heading: #1E293B;
+  --bb-text-secondary: #64748B;
+  --bb-faint: #94A3B8;
+  --bb-invert: #FFFFFF;
+
+  --bb-font-sans: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --bb-font-num: "DIN Alternate", "Segoe UI", sans-serif;
+  --bb-font-mono: "SFMono-Regular", Consolas, "Courier New", monospace;
+
+  --bb-r-card: 14px;
+  --bb-r-ctl: 10px;
+  --bb-r-sm: 8px;
+  --bb-r-xs: 7px;
+  --bb-r-pill: 999px;
+
+  --bb-shadow-card: 0 1px 3px rgba(15, 23, 42, .06), 0 8px 24px rgba(15, 23, 42, .05);
+  --bb-shadow-card-hover: 0 2px 6px rgba(15, 23, 42, .08), 0 16px 40px rgba(15, 23, 42, .10);
+  --bb-shadow-bar: 0 1px 2px rgba(15, 23, 42, .04), 0 4px 16px rgba(15, 23, 42, .06);
+  --bb-shadow-primary: 0 2px 8px rgba(13, 148, 136, .24);
+  --bb-shadow-primary-hover: 0 4px 14px rgba(13, 148, 136, .34);
+  --bb-shadow-focus: 0 0 0 3px rgba(13, 148, 136, .14);
+
+  --bb-topbar-h: 68px;
+  --bb-content-max: 1200px;
+  --bb-z-nav: 50;
+  --bb-z-modal: 60;
+  --bb-z-toast: 80;
+  --bb-t: .2s;
+
+  /* ====== 旧变量名别名（映射到套件取值，勿删） ====== */
+
   /* —— 基底 —— */
-  --bg: #0d0a16;            /* 页面背景（带紫调近黑，勿改纯黑） */
-  --bg-soft: #100c1c;       /* 略亮一档的背景 */
-  --panel: #151021;         /* 卡片/面板底 */
-  --panel-2: #1a1428;       /* 悬浮/第二层面板 */
-  --line: #2a2340;          /* 描边/分隔线（低饱和紫灰） */
-  --line-soft: #221b34;     /* 更弱的分隔线 */
+  --bg: var(--bb-bg);
+  --bg-soft: #F1F5F9;
+  --panel: var(--bb-card);
+  --panel-2: var(--bb-input-bg);
+  --line: var(--bb-border);
+  --line-soft: var(--bb-border-soft);
 
-  /* —— 品牌强调（双色体系） —— */
-  --pink: #ff3e93;          /* 抖音品红：标题强调、选中态、品牌点 */
-  --pink-soft: rgba(255, 62, 147, 0.14);
-  --cyan: #3fd8e5;          /* 青色：主按钮、输入框焦点、链接 */
-  --cyan-dim: rgba(63, 216, 229, 0.12);
+  /* —— 品牌强调：主色青碧；抖音平台强调 = 套件紫（模块徽章 b-dy 同源） —— */
+  --pink: #7C3AED;
+  --pink-soft: rgba(124, 58, 237, 0.08);
+  --cyan: var(--bb-primary);
+  --cyan-dim: rgba(13, 148, 136, 0.08);
 
-  /* —— 语义状态（功能性用色，不参与装饰） —— */
-  --green: #3ddc84;
-  --green-soft: rgba(61, 220, 132, 0.14);
-  --red: #e0536b;
-  --red-soft: rgba(224, 83, 107, 0.16);
-  --amber: #f5c84c;         /* 猫黄，兼作警告色 */
-  --amber-soft: rgba(245, 200, 76, 0.14);
+  /* —— 语义状态 —— */
+  --green: var(--bb-success);
+  --green-soft: rgba(5, 150, 105, 0.10);
+  --red: var(--bb-danger);
+  --red-soft: rgba(225, 29, 72, 0.08);
+  --amber: var(--bb-warning);
+  --amber-soft: rgba(217, 119, 6, 0.10);
 
   /* —— 文字层级 —— */
-  --text: #f2eff7;
-  --muted: #8b86a0;
-  --faint: #5e5875;
-  --invert: #0d0a16;        /* 实色按钮上的深色文字 */
+  --text: var(--bb-text);
+  --muted: var(--bb-text-secondary);
+  --faint: var(--bb-faint);
+  --invert: var(--bb-invert);
 
-  /* —— 字体（不依赖任何远程字体） —— */
-  --font-sans: "MiSans", "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
-  --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, "Courier New", monospace;
+  /* —— 字体 —— */
+  --font-sans: var(--bb-font-sans);
+  --font-mono: var(--bb-font-mono);
 
-  /* —— 字号阶梯 —— */
-  --fs-display: 44px;   /* 工作台大标题 */
-  --fs-h1: 22px;        /* 页标题 */
-  --fs-h2: 16px;        /* 卡片标题 */
-  --fs-body: 14px;      /* 正文 */
-  --fs-small: 12.5px;   /* 次要信息 */
-  --fs-label: 11px;     /* 标签/大字距小字 */
+  /* —— 字号阶梯（套件规范：页标题 26 / 区块 17 / 正文 14） —— */
+  --fs-display: 26px;
+  --fs-h1: 22px;
+  --fs-h2: 15px;
+  --fs-body: 14px;
+  --fs-small: 12.5px;
+  --fs-label: 11px;
 
-  /* —— 间距（8pt 网格） —— */
+  /* —— 间距（8pt 网格，与旧版一致） —— */
   --sp-1: 4px;
   --sp-2: 8px;
   --sp-3: 12px;
@@ -57,51 +115,27 @@
   --sp-7: 48px;
   --sp-8: 64px;
 
-  /* —— 圆角（跟随参考：卡大、控件中、徽章全圆） —— */
-  --r-card: 16px;
+  /* —— 圆角（套件：卡 14 / 控件 10） —— */
+  --r-card: 14px;
   --r-input: 10px;
   --r-small: 8px;
   --r-pill: 999px;
 
   /* —— 布局尺寸 —— */
-  --sidebar-w: 232px;
-  --content-max: 1020px;    /* 参考界面主内容列宽 */
+  --sidebar-w: 232px;        /* 旧布局遗留，顶栏化后不再使用，保留防引用报错 */
+  --content-max: 1200px;
 
-  /* —— 描边光效（选中态/主卡片的品牌光晕，仅小面积使用） —— */
-  --glow-pink: 0 0 0 1px rgba(255, 62, 147, 0.4), 0 0 24px rgba(255, 62, 147, 0.12);
-  --glow-cyan: 0 0 0 1px rgba(63, 216, 229, 0.45), 0 0 20px rgba(63, 216, 229, 0.1);
+  /* —— 光效 → 套件柔和焦点环 —— */
+  --glow-pink: 0 0 0 3px rgba(124, 58, 237, 0.12);
+  --glow-cyan: var(--bb-shadow-focus);
 
   /* —— 动效 —— */
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
   --t-fast: 0.16s var(--ease);
   --t-med: 0.3s var(--ease);
 
-  /* —— z-index 层级（全站只用这五档） —— */
-  --z-nav: 10;
+  /* —— z-index —— */
+  --z-nav: 50;
   --z-modal: 60;
   --z-toast: 80;
-}
-
-/* 浅色主题占位：设置页切换主题时给 <html> 加 data-theme="light" */
-[data-theme="light"] {
-  --bg: #f4f2f8;
-  --bg-soft: #edeaf4;
-  --panel: #ffffff;
-  --panel-2: #faf8fd;
-  --line: #ddd7ea;
-  --line-soft: #e9e5f2;
-  --pink: #e0297c;
-  --pink-soft: rgba(224, 41, 124, 0.1);
-  --cyan: #0899a8;
-  --cyan-dim: rgba(8, 153, 168, 0.1);
-  --green: #14934f;
-  --green-soft: rgba(20, 147, 79, 0.12);
-  --red: #c43a52;
-  --red-soft: rgba(196, 58, 82, 0.12);
-  --amber: #a87b16;
-  --amber-soft: rgba(168, 123, 22, 0.12);
-  --text: #221d31;
-  --muted: #6b6580;
-  --faint: #9c96ae;
-  --invert: #ffffff;
 }

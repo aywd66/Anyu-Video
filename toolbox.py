@@ -43,62 +43,43 @@ def _open(path):
 
 
 class Toolbox:
-    # 「方案C-明亮商务风」主题（与 WebUI tokens.css 同源）
-    C_BG = "#FAF9F6"        # 暖白底
-    C_CARD = "#FFFFFF"      # 卡片白
-    C_PRIMARY = "#0D9488"   # 青碧主色
-    C_PRIMARY_DARK = "#0F766E"
-    C_PRIMARY_LIGHT = "#F0FDFA"
-    C_TEXT = "#334155"
-    C_HEADING = "#1E293B"
-    C_MUTED = "#64748B"
-    C_BORDER = "#E2E8F0"
-
     def __init__(self, root):
         self.root = root
         root.title("视频下载工具箱")
         root.geometry("860x600")
         root.minsize(760, 500)
-        root.configure(bg=self.C_BG)
 
-        tk.Label(root, text="视频下载工具箱", font=("Microsoft YaHei", 16, "bold"),
-                 bg=self.C_BG, fg=self.C_HEADING).pack(pady=(12, 2))
+        tk.Label(root, text="视频下载工具箱", font=("Microsoft YaHei", 16, "bold")).pack(pady=(12, 2))
         tk.Label(root, text="抖音高清下载 · 快手主页下载 · 程序(直链)下载 — 三合一", font=("Microsoft YaHei", 9),
-                 bg=self.C_BG, fg=self.C_MUTED).pack(pady=(0, 8))
+                 fg="#666").pack(pady=(0, 8))
 
-        body = tk.Frame(root, bg=self.C_BG)
+        body = tk.Frame(root)
         body.pack(fill="both", expand=True, padx=10)
         # 左侧功能按钮区
-        left = tk.Frame(body, bg=self.C_BG)
+        left = tk.Frame(body)
         left.pack(side="left", fill="y", padx=(0, 8))
 
         def btn(parent, text, cmd, tip=""):
             b = tk.Button(parent, text=text, font=("Microsoft YaHei", 10), anchor="w",
-                          width=30, padx=12, pady=7, command=cmd,
-                          bg=self.C_CARD, fg=self.C_TEXT, activebackground=self.C_PRIMARY_LIGHT,
-                          activeforeground=self.C_PRIMARY_DARK, relief="flat", cursor="hand2",
-                          highlightthickness=1, highlightbackground=self.C_BORDER)
+                          width=30, padx=12, pady=7, command=cmd)
             b.pack(fill="x", pady=3)
             if tip:
                 _tip(b, tip)
             return b
 
-        sep = lambda: tk.Frame(left, height=8, bg=self.C_BG).pack()
+        sep = lambda: tk.Frame(left, height=8).pack()
 
-        tk.Label(left, text="— 抖音（模块 1）—", fg=self.C_PRIMARY_DARK, bg=self.C_BG,
-                 font=("Microsoft YaHei", 9, "bold")).pack(anchor="w", pady=(2, 2))
+        tk.Label(left, text="— 抖音（模块 1）—", fg="#0a2540", font=("Microsoft YaHei", 9, "bold")).pack(anchor="w", pady=(2, 2))
         btn(left, "▶ 抖音下载器（交互命令行）", self.dy_cli, "粘贴抖音链接批量下载视频/图集；支持登录、增量、多模式")
         btn(left, "▶ 抖音 WebUI（浏览器界面）", self.dy_webui, "本地网页界面，查看库、发起下载（127.0.0.1:8518）")
         btn(left, "打开抖音下载目录", lambda: _open(os.path.join(HERE, "downloads", "douyin")))
         sep()
-        tk.Label(left, text="— 快手（模块 2）—", fg=self.C_PRIMARY_DARK, bg=self.C_BG,
-                 font=("Microsoft YaHei", 9, "bold")).pack(anchor="w", pady=(2, 2))
+        tk.Label(left, text="— 快手（模块 2）—", fg="#0a2540", font=("Microsoft YaHei", 9, "bold")).pack(anchor="w", pady=(2, 2))
         btn(left, "▶ 快手一键下载器（图形窗口）", self.ks_gui, "弹窗粘贴快手分享链接，自动解析主页并批量下载")
         btn(left, "▶ 快手扫码登录（刷新登录态）", self.ks_login, "弹出浏览器扫码，刷新快手 Cookie 登录态")
         btn(left, "打开快手下载目录", lambda: _open(os.path.join(HERE, "data", "kuaishou")))
         sep()
-        tk.Label(left, text="— 程序下载（模块 3）—", fg=self.C_PRIMARY_DARK, bg=self.C_BG,
-                 font=("Microsoft YaHei", 9, "bold")).pack(anchor="w", pady=(2, 2))
+        tk.Label(left, text="— 程序下载（模块 3）—", fg="#0a2540", font=("Microsoft YaHei", 9, "bold")).pack(anchor="w", pady=(2, 2))
         btn(left, "▶ 直链下载（输入链接）", self.cf_download, "clawfetch 直链下载器：断点续传/重试/SHA-256 校验")
         btn(left, "▶ 直链解析（只解析不下载）", self.cf_resolve, "把分享中转页解析成真实直链，可粘到 IDM/aria2")
         btn(left, "打开直链下载目录", lambda: _open(os.path.join(HERE, "downloads", "direct")))
@@ -107,11 +88,10 @@ class Toolbox:
         btn(left, "❌ 退出", root.destroy)
 
         # 右侧日志区
-        right = tk.Frame(body, bg=self.C_BG)
+        right = tk.Frame(body)
         right.pack(side="left", fill="both", expand=True)
-        tk.Label(right, text="运行日志：", anchor="w", bg=self.C_BG, fg=self.C_MUTED).pack(fill="x")
-        self.log = scrolledtext.ScrolledText(right, font=("Consolas", 9), state="disabled",
-                                             bg=self.C_CARD, fg=self.C_TEXT, relief="flat")
+        tk.Label(right, text="运行日志：", anchor="w").pack(fill="x")
+        self.log = scrolledtext.ScrolledText(right, font=("Consolas", 9), state="disabled")
         self.log.pack(fill="both", expand=True)
 
         self._check_env()
@@ -293,7 +273,7 @@ def _tip(widget, text):
         t = tk.Toplevel(widget)
         t.wm_overrideredirect(True)
         t.wm_geometry("+%d+%d" % (widget.winfo_rootx() + widget.winfo_width() + 8, widget.winfo_rooty() + 4))
-        tk.Label(t, text=text, bg="#F0FDFA", fg="#0F766E", relief="solid", borderwidth=1,
+        tk.Label(t, text=text, bg="#ffffe0", relief="solid", borderwidth=1,
                  font=("Microsoft YaHei", 9), justify="left", wraplength=380).pack()
         widget._tipwin = t
 

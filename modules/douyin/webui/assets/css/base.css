@@ -1,5 +1,5 @@
 /* ============================================================
- * base.css — Reset 与基础元素
+ * base.css — Reset 与基础元素（v2 明亮商务风）
  * ============================================================ */
 *,
 *::before,
@@ -15,18 +15,19 @@ body {
 }
 
 body {
-  background: var(--bg);
-  color: var(--text);
+  background: var(--bb-bg);
+  color: var(--bb-text);
   font-family: var(--font-sans);
   font-size: var(--fs-body);
-  line-height: 1.6;
+  line-height: 1.7;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
-/* 页面级滚动放在主内容区，侧边栏固定 */
+/* 应用骨架：顶栏 + 主内容区（纵向滚动在 .main） */
 #app {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   overflow: hidden;
 }
@@ -36,7 +37,7 @@ h1, h2, h3, h4, p {
 }
 
 a {
-  color: var(--cyan);
+  color: var(--bb-primary);
   text-decoration: none;
 }
 
@@ -50,31 +51,38 @@ code,
   font-size: 0.92em;
 }
 
+code {
+  background: var(--bb-input-bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+
 button {
   font-family: inherit;
 }
 
 ::selection {
-  background: var(--pink-soft);
-  color: var(--text);
+  background: var(--bb-primary-light);
+  color: var(--bb-primary-dark);
 }
 
 /* 焦点可见性（键盘可达性） */
 :focus-visible {
-  outline: 2px solid var(--cyan);
+  outline: 2px solid var(--bb-primary);
   outline-offset: 2px;
   border-radius: 4px;
 }
 
-/* 滚动条（深色系） */
+/* 滚动条（浅色系） */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--line);
+  background: #CBD5E1;
   border-radius: 5px;
-  border: 2px solid var(--bg);
+  border: 2px solid var(--bb-bg);
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--faint);
@@ -89,7 +97,7 @@ button {
   vertical-align: -0.18em;
 }
 
-/* 大字距小标签（DESKTOP / Download 等） */
+/* 大字距小标签 */
 .tag-caps {
   font-size: var(--fs-label);
   letter-spacing: 0.15em;
@@ -98,9 +106,8 @@ button {
   font-weight: 600;
 }
 
-/* 数字统一等宽 */
+/* 数字统一等宽/表格数字 */
 .num {
-  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
 

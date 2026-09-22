@@ -1,0 +1,7 @@
+﻿# 视频下载工具箱 - 运行时产物（不入库）
+runtime/
+downloads/
+data/
+modules/douyin/webui/.tasks/
+__pycache__/
+*.pyc

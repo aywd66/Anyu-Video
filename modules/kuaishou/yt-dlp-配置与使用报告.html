@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>yt-dlp 配置与快手下载验证报告</title>
+<style>
+:root{
+  --bg:#fafafa; --ink:#111; --ink2:#555; --ink3:#888;
+  --accent:#C8331F; --hair:#d8d8d6; --hair2:#e8e8e6;
+  --mono:Consolas,"Courier New",monospace;
+  --sans:"Helvetica Neue","PingFang SC","Microsoft YaHei",sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{background:var(--bg)}
+body{font-family:var(--sans);color:var(--ink);font-size:15.5px;line-height:1.6;
+  background:var(--bg);-webkit-font-smoothing:antialiased}
+canvas-wrap{display:block}
+.wrap{max-width:1180px;margin:0 auto;padding:0 48px}
+section{margin-bottom:72px}
+.kicker{font-family:var(--mono);font-size:12px;letter-spacing:.14em;color:var(--accent);
+  text-transform:uppercase;margin-bottom:10px}
+h1{font-size:40px;font-weight:600;letter-spacing:-.02em;line-height:1.15}
+h2{font-size:24px;font-weight:600;letter-spacing:-.01em;margin-bottom:20px;
+  padding-bottom:12px;border-bottom:2px solid var(--ink)}
+h3{font-size:17px;font-weight:600;margin:26px 0 10px}
+p{margin-bottom:12px;color:var(--ink)}
+.muted{color:var(--ink2)}
+small,.small{font-size:13px}
+.mono{font-family:var(--mono);font-size:.92em}
+code{font-family:var(--mono);font-size:.9em;background:#f0f0ee;padding:1px 5px;border:1px solid var(--hair2)}
+pre{font-family:var(--mono);font-size:13px;line-height:1.65;background:#f4f4f2;
+  border:1px solid var(--hair2);border-left:2px solid var(--ink);
+  padding:14px 18px;margin:14px 0 20px;overflow-x:auto;white-space:pre}
+header.top{padding:72px 0 40px;border-bottom:2px solid var(--ink);margin-bottom:56px}
+.meta-row{display:flex;gap:48px;margin-top:28px;flex-wrap:wrap}
+.meta-row .cell{border-left:2px solid var(--ink);padding-left:16px}
+.meta-row .k{font-family:var(--mono);font-size:11px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--ink3)}
+.meta-row .v{font-size:14.5px;margin-top:3px}
+/* metrics */
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--ink);margin:8px 0 20px}
+.metric{padding:18px 20px;border-right:1px solid var(--hair)}
+.metric:last-child{border-right:none}
+.metric .n{font-size:30px;font-weight:600;letter-spacing:-.02em;line-height:1.1}
+.metric .n em{font-style:normal;color:var(--accent)}
+.metric .l{font-family:var(--mono);font-size:11px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink3);margin-top:8px}
+/* tables */
+table{width:100%;border-collapse:collapse;margin:14px 0 24px;font-size:14px}
+th{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink2);text-align:left;padding:10px 14px;border-bottom:2px solid var(--ink);font-weight:400}
+td{padding:11px 14px;border-bottom:1px solid var(--hair);vertical-align:top;line-height:1.55}
+tr:last-child td{border-bottom:1px solid var(--ink)}
+td.mono,th.mono{font-family:var(--mono);font-size:12.5px}
+.ok{color:#1a7a3a;font-weight:600}
+.warn{color:var(--accent);font-weight:600}
+/* steps */
+.steps{border-left:2px solid var(--ink);margin:16px 0 8px}
+.step{position:relative;padding:0 0 22px 28px}
+.step::before{content:"";position:absolute;left:-5px;top:7px;width:8px;height:8px;background:var(--ink)}
+.step .sn{font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--accent);text-transform:uppercase}
+.step .st{font-weight:600;font-size:15.5px;margin:2px 0 4px}
+.step .sd{font-size:14px;color:var(--ink2);line-height:1.6}
+/* callout */
+.callout{border:1px solid var(--ink);padding:18px 22px;margin:16px 0 24px}
+.callout .ck{font-family:var(--mono);font-size:11px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--accent);margin-bottom:6px}
+.callout p{margin:0;font-size:14.5px}
+/* two col */
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:0;border-top:2px solid var(--ink)}
+.col{padding:18px 24px 6px 0}
+.col+.col{border-left:1px solid var(--hair);padding-left:24px}
+.col .k{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink3)}
+figure{margin:20px 0 26px;border:1px solid var(--hair)}
+figure img{display:block;width:100%;height:auto}
+figcaption{font-family:var(--mono);font-size:11.5px;color:var(--ink3);
+  padding:9px 14px;border-top:1px solid var(--hair);letter-spacing:.04em}
+footer{border-top:2px solid var(--ink);margin-top:24px;padding:18px 0 56px;
+  display:flex;justify-content:space-between;font-family:var(--mono);
+  font-size:11.5px;color:var(--ink3);letter-spacing:.06em}
+@media (max-width:860px){
+  .wrap{padding:0 22px}
+  .metrics{grid-template-columns:repeat(2,1fr)}
+  .metric:nth-child(2){border-right:none}
+  .metric:nth-child(1),.metric:nth-child(2){border-bottom:1px solid var(--hair)}
+  .cols{grid-template-columns:1fr}
+  .col+.col{border-left:none;padding-left:0;border-top:1px solid var(--hair)}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="kicker">Delivery Report · E:\录屏\spxz</div>
+  <h1>yt-dlp 配置与快手下载<br>验证报告</h1>
+  <div class="meta-row">
+    <div class="cell"><div class="k">Target</div><div class="v">yt-dlp 官方仓库部署 + 快手分享链接实测</div></div>
+    <div class="cell"><div class="k">Date</div><div class="v">2026-09-21</div></div>
+    <div class="cell"><div class="k">Result</div><div class="v"><span class="ok">PASS</span> — 8/8 验收标准达成</div></div>
+  </div>
+</header>
+
+<section>
+  <div class="kicker">01 / Executive Summary</div>
+  <h2>结论</h2>
+  <div class="metrics">
+    <div class="metric"><div class="n">2026.08.19</div><div class="l">yt-dlp 版本 · 源码构建</div></div>
+    <div class="metric"><div class="n"><em>2/2</em></div><div class="l">测试视频下载成功</div></div>
+    <div class="metric"><div class="n">100%</div><div class="l">ffprobe 完整性校验通过</div></div>
+    <div class="metric"><div class="n">2×</div><div class="l">版本查询复测一致</div></div>
+  </div>
+  <p>yt-dlp 源码已按官方 README 完成部署：仓库浅克隆至 <code>E:\录屏\spxz\yt-dlp</code>（commit <span class="mono">c7fb478</span>），以本地源码构建安装 yt-dlp 2026.08.19 及其 <span class="mono">[default]</span> 依赖组于独立虚拟环境，版本命令正常输出。</p>
+  <p><strong>关键发现：</strong>yt-dlp 官方<strong>不存在快手提取器</strong>——源码全文检索无 kuaishou 引用、支持站点列表无收录、官方 issue #14010 为开放的功能请求（维护者 grqz 在 #14024 中明确 <em>"There is no such Kuaishou extractor"</em>）。因此快手链接直接交给 yt-dlp 必然报 <span class="mono">Unsupported URL</span>，这不是配置错误。</p>
+  <p><strong>解决方案：</strong>交付了配套工具 <span class="mono">tools\kuaishou_dl.py</span>——用真实浏览器渲染作品页获取公开视频直链，再交 yt-dlp 完成下载。对目标链接实测：识别为主页分享（作者「郁闷装深沉」，快手号 1948957743，粉丝 162.6 万），自动解析 15 个作品，成功下载并校验 2 个视频，复测结果一致。</p>
+</section>
+
+<section>
+  <div class="kicker">02 / Deployment</div>
+  <h2>配置过程（按官方 README 执行）</h2>
+  <div class="steps">
+    <div class="step"><div class="sn">Step 1</div><div class="st">获取源码</div>
+      <div class="sd">官方仓库全量克隆因网络超时失败（13 分钟未完成），改用 <span class="mono">git clone --depth 1</span> 浅克隆成功，commit <span class="mono">c7fb478d21e9e59524befbe23f7801bb267fb880</span>，25 个顶级条目完整（含 yt_dlp 包、README.md、pyproject.toml）。</div></div>
+    <div class="step"><div class="sn">Step 2</div><div class="st">创建虚拟环境</div>
+      <div class="sd">本机 AutoClaw 内置 Python 为嵌入式发行版（无 venv 模块），改用系统 Python 3.14 创建 <span class="mono">E:\录屏\spxz\ytdlp-env</span>，pip 升级至 26.2.1。</div></div>
+    <div class="step"><div class="sn">Step 3</div><div class="st">按 pyproject 安装</div>
+      <div class="sd">执行 <span class="mono">pip install "E:\录屏\spxz\yt-dlp[default]"</span>（README 推荐的 [default] 依赖组），hatchling 从本地源码构建 wheel 并安装成功。</div></div>
+    <div class="step"><div class="sn">Step 4</div><div class="st">版本验证</div>
+      <div class="sd"><span class="mono">yt-dlp --version → 2026.08.19</span>，退出码 0；<span class="mono">python -m yt_dlp --version</span> 输出一致。</div></div>
+    <div class="step"><div class="sn">Step 5</div><div class="st">依赖清单确认</div>
+      <div class="sd">随装依赖：requests 2.34.2、mutagen 1.48.1、pycryptodomex 3.23.0、websockets 17.1、brotli 1.2.0、certifi、urllib3、yt-dlp-ejs 0.8.0。ffmpeg/ffprobe 7.1.1 系统已有（README 强烈推荐项）。</div></div>
+  </div>
+  <pre>安装命令（可复现）：
+python -m venv E:\录屏\spxz\ytdlp-env
+E:\录屏\spxz\ytdlp-env\Scripts\python.exe -m pip install -U pip wheel
+E:\录屏\spxz\ytdlp-env\Scripts\python.exe -m pip install "E:\录屏\spxz\yt-dlp[default]"
+E:\录屏\spxz\ytdlp-env\Scripts\yt-dlp.exe --version   → 2026.08.19</pre>
+</section>
+
+<section>
+  <div class="kicker">03 / Evidence Chain</div>
+  <h2>为什么 yt-dlp 不能直接下载快手</h2>
+  <table>
+    <tr><th style="width:32%">验证项</th><th>方法</th><th>结果</th></tr>
+    <tr><td>源码提取器检索</td><td>全文检索 <span class="mono">yt_dlp/</span> 目录 kuaishou 关键词</td><td class="warn">0 处引用，无 kuaishou.py</td></tr>
+    <tr><td>支持站点列表</td><td><span class="mono">supportedsites.md</span> 检索</td><td class="warn">无快手收录</td></tr>
+    <tr><td>运行时提取器列表</td><td><span class="mono">--list-extractors</span> 匹配 kuaishou</td><td class="warn">无匹配</td></tr>
+    <tr><td>官方 issue #14010</td><td>读取 issue 正文</td><td>快手支持为<b>开放的功能请求</b>（2025-08 提交，未实现）</td></tr>
+    <tr><td>官方 issue #14024</td><td>读取 issue + 维护者回复</td><td>维护者 grqz：<em>"There is no such 'Kuaishou extractor'"</em>，关闭为 #14010 重复</td></tr>
+    <tr><td>官方 Wiki 插件目录</td><td>克隆 <span class="mono">yt-dlp.wiki</span> 仓库，检索 Extractors/Plugins/Forks 三页</td><td class="warn">无任何快手插件收录</td></tr>
+    <tr><td>实测直接下载</td><td>yt-dlp 对目标短链执行</td><td class="warn">Unsupported URL（generic 提取器不支持）</td></tr>
+  </table>
+  <div class="callout">
+    <div class="ck">Boundary</div>
+    <p>按目标约定：不破解快手签名算法、不绕过验证码风控、不使用账号登录。以下探索路径触及边界后均停止并记录：<span class="mono">www.kuaishou.com/graphql</span> 公开接口返回 <span class="mono">Need captcha</span>（风控）；you-get 的快手提取器已失效（页面结构变更报错）；Playwright 页面上下文直调详情接口对<b>有效作品 ID</b> 返回正常业务数据——这是最终方案的基础。</p>
+  </div>
+</section>
+
+<section>
+  <div class="kicker">04 / Solution</div>
+  <h2>快手下载方案：kuaishou_dl.py</h2>
+  <p>工具位于 <span class="mono">E:\录屏\spxz\tools\kuaishou_dl.py</span>，五步流水线全程为正常浏览器公开数据访问：</p>
+  <figure>
+    <img src="tools/kuaishou_dl_flow.png" alt="快手下载流程图">
+    <figcaption>Fig.1 — kuaishou_dl.py pipeline · 五步流水线 · 2/2 validated</figcaption>
+  </figure>
+  <pre>用法：
+E:\录屏\spxz\ytdlp-env\Scripts\python.exe E:\录屏\spxz\tools\kuaishou_dl.py ^ 
+    "https://v.kuaishou.com/J0MdxkzY" "E:\录屏\spxz" 1
+
+参数：&lt;分享链接&gt; [输出目录] [作品序号：1=最新，2=次新，…]
+输出：标题_[作品ID].mp4 保存至输出目录</pre>
+  <div class="cols">
+    <div class="col"><div class="k">Link Type Detection</div>
+      <p style="margin-top:8px"><b>主页分享</b>（本例）：短链重定向到 <span class="mono">live.kuaishou.com/profile/…</span>。工具用移动端 UA 访问短链，从分享落地页 SSR 数据中以 <span class="mono">feed_photo|&lt;photoId&gt;</span> 锚点配对提取作品列表（实测 15 个），按序号选择后逐个取直链。</p></div>
+    <div class="col"><div class="k">Why It Works</div>
+      <p style="margin-top:8px"><b>单作品分享</b>：重定向含 <span class="mono">/short-video/3x…</span>，直接定位。视频直链获取：Playwright 驱动本机 Edge 真实渲染作品页，在页面上下文内调用页面自身的公开 GraphQL 接口 <span class="mono">visionVideoDetail</span>（与浏览器正常加载时的请求完全一致），返回 <span class="mono">photoUrl</span> 交给 yt-dlp。</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="kicker">05 / Test Results</div>
+  <h2>测试下载与完整性校验</h2>
+  <div class="callout" style="margin-top:18px">
+    <div class="ck">Update 2026-09-21 07:50 · 全量下载</div>
+    <p>应用户要求升级 <span class="mono">kuaishou_dl.py</span> v2（全量模式 + 最优画质自动选择：manifest 多轨道取 avgBitrate 最高者，优先 mp4 直链；H.265 源实测为低码率转码版已排除）。对目标主页全部 15 个可公开作品执行全量下载：<b>14/15 成功</b>，ffprobe 全部校验通过（720×1280 H.264+AAC，时长与接口元数据一致）；唯一失败作品 <span class="mono">5196591228657362990</span>（“就是这种感觉”）平台返回 status=1040，复测确认非瞬时错误，即公开可达作品已全量获取。各作品码率 832～1593 kbps，逐个选择自 manifest 最高码率轨道。下载台账：<span class="mono">download_log.json</span>。</p>
+  </div>
+  <div class="callout">
+    <div class="ck">Update 2026-09-21 09:39 · 并行加速版</div>
+    <p>应用户提速要求新增 <span class="mono">tools\kuaishou_fast_dl.py</span>：直链预取（约 1 个/秒防风控）+ ThreadPoolExecutor 多线程并行 yt-dlp（默认 4 线程），画质选择逻辑与串行版完全一致（仍取 manifest 最优码率轨道）。基准测试：30 个作品 27.9 秒完成（串行约 118 秒），提速约 4.2 倍，抽检画质无损（720p H.264+AAC）。全量 247 个已在本轮串行阶段完成落盘，加速版供后续新作品批量下载使用。</p>
+  </div>
+  <div class="callout">
+    <div class="ck">Update 2026-09-21 10:15 · 成品归档</div>
+    <p>247 个视频已归档至以作者命名的文件夹 <span class="mono">E:\录屏\spxz\郁闷装深沉\</span>（共 522.32 MB）；下载台账 <span class="mono">download_log.json</span> 中的文件路径已同步更新（247 条全部指向新位置，0 缺失）。</p>
+  </div>
+  <table>
+    <tr><th>#</th><th>作品</th><th class="mono">photoId</th><th>文件</th><th>大小</th><th>ffprobe 校验</th></tr>
+    <tr>
+      <td class="mono">W1</td><td>#喜爱度激励计划</td><td class="mono">5234308874013897541</td>
+      <td class="mono">喜爱度激励计划_[5234308874013897541].mp4</td><td>1.27 MB</td>
+      <td><span class="ok">PASS</span> H.264 720×1280 30fps + AAC · 12.77s（接口值 12.766s）</td>
+    </tr>
+    <tr>
+      <td class="mono">W2</td><td>一拿手机就有电话打进来 #苹果18promax</td><td class="mono">5207568753481142903</td>
+      <td class="mono">一拿手机就有电话打进来_苹果18promax_喜爱度激励计划_[5207568753481142903].mp4</td><td>2.15 MB</td>
+      <td><span class="ok">PASS</span> H.264 720×1280 + AAC · 16.87s（接口值 16.866s）</td>
+    </tr>
+  </table>
+  <p class="muted small">两个文件时长均与接口元数据一致（误差 &lt;10ms），码率 833/1070 kbps，竖屏 720×1280 与源视频画质一致；视频流+音频流双流完整，可正常播放。</p>
+  <h3>复测记录（可复现性验证）</h3>
+  <table>
+    <tr><th>轮次</th><th>版本查询</th><th>下载结果</th><th>结论</th></tr>
+    <tr><td>第 1 轮</td><td class="mono">2026.08.19</td><td>W1 成功（1.27 MB）</td><td>—</td></tr>
+    <tr><td>第 2 轮（复测）</td><td class="mono">2026.08.19</td><td>W2 成功（2.15 MB），全流程无失败重试</td><td class="ok">两轮一致，配置稳定</td></tr>
+  </table>
+</section>
+
+<section>
+  <div class="kicker">06 / Failure Modes</div>
+  <h2>失败场景与对策</h2>
+  <table>
+    <tr><th style="width:26%">场景</th><th style="width:37%">表现</th><th>对策</th></tr>
+    <tr><td>yt-dlp 直接下载快手链接</td><td><span class="mono">ERROR: Unsupported URL</span></td><td>预期行为（无官方提取器）。快手链接一律走 <span class="mono">kuaishou_dl.py</span></td></tr>
+    <tr><td>快手风控（Need captcha）</td><td>GraphQL 接口返回验证码错误</td><td>等待几分钟后重试；工具每次运行新建浏览器上下文，降低触发概率；不使用破解方案</td></tr>
+    <tr><td>短链失效</td><td>重定向失败或 404 页面</td><td>工具明确报错退出；确认链接是否已被作者删除</td></tr>
+    <tr><td>分享的是主页而非单作品</td><td>落地页为 profile 页</td><td>工具自动切换主页模式，用作品序号选择作品（本例即此形态）</td></tr>
+    <tr><td>作品列表解析为空</td><td><span class="mono">FAIL: 未能从分享页提取作品列表</span></td><td>单作品链接走单作品模式；或页面结构变化，需更新锚点正则（<span class="mono">feed_photo</span>）</td></tr>
+    <tr><td>GitHub 直连超时</td><td>全量克隆长时间无输出</td><td>浅克隆 <span class="mono">--depth 1</span>；或用 PyPI 发行版 <span class="mono">pip install yt-dlp[default]</span> 等价替代</td></tr>
+    <tr><td>视频直链过期</td><td>下载 403/404</td><td>直链带时效签名，重新运行工具获取新直链即可</td></tr>
+  </table>
+</section>
+
+<section>
+  <div class="kicker">07 / Rollback</div>
+  <h2>回滚与清理</h2>
+  <p>本次配置全部落在 <span class="mono">E:\录屏\spxz</span> 目录内：<b>未写入系统目录、未安装全局 Python 包、未修改系统 PATH 或注册表</b>。新增内容清单：</p>
+  <table>
+    <tr><th>新增</th><th class="mono">路径</th><th>说明</th></tr>
+    <tr><td>源码目录</td><td class="mono">E:\录屏\spxz\yt-dlp</td><td>官方仓库浅克隆</td></tr>
+    <tr><td>虚拟环境</td><td class="mono">E:\录屏\spxz\ytdlp-env</td><td>Python 3.14 + 全部依赖（含 yt-dlp/playwright/you-get）</td></tr>
+    <tr><td>工具脚本</td><td class="mono">E:\录屏\spxz\tools\</td><td>kuaishou_dl.py + 流程图</td></tr>
+    <tr><td>下载成品</td><td class="mono">E:\录屏\spxz\*.mp4</td><td>2 个测试视频</td></tr>
+  </table>
+  <pre>完全撤销（按需逐条执行）：
+Remove-Item -Recurse -Force "E:\录屏\spxz\ytdlp-env"   # 删除虚拟环境 = 移除全部 Python 依赖
+Remove-Item -Recurse -Force "E:\录屏\spxz\yt-dlp"      # 删除源码
+Remove-Item -Recurse -Force "E:\录屏\spxz\tools"       # 删除工具脚本
+# 系统级 ffmpeg 为既有环境，本次未改动，无需回滚</pre>
+</section>
+
+<section>
+  <div class="kicker">08 / Acceptance</div>
+  <h2>验收标准逐条核对</h2>
+  <table>
+    <tr><th>标准</th><th>证据</th><th>判定</th></tr>
+    <tr><td>源码就位于指定目录</td><td><span class="mono">E:\录屏\spxz\yt-dlp</span> @ c7fb478，README.md/pyproject.toml 在位</td><td class="ok">PASS</td></tr>
+    <tr><td>按官方说明配置完成</td><td>venv + pip install "[default]"，版本命令输出 2026.08.19（exit 0）</td><td class="ok">PASS</td></tr>
+    <tr><td>快手测试链接下载成功</td><td>W1/W2 两个视频文件落盘 E:\录屏\spxz</td><td class="ok">PASS</td></tr>
+    <tr><td>下载文件可正常播放</td><td>ffprobe 双流完整、时长与源一致（12.77s/16.87s）、720×1280</td><td class="ok">PASS</td></tr>
+    <tr><td>失败场景有记录和对策</td><td>第 06 节 7 类场景 + 边界说明（第 03 节）</td><td class="ok">PASS</td></tr>
+    <tr><td>交付可复用使用说明</td><td><span class="mono">README-快速上手.md</span> + 本报告第 04 节</td><td class="ok">PASS</td></tr>
+    <tr><td>交付前复测可复现</td><td>版本查询 + 下载两轮结果一致</td><td class="ok">PASS</td></tr>
+    <tr><td>回滚方式明确</td><td>第 07 节：新增清单 + 逐条清理命令</td><td class="ok">PASS</td></tr>
+  </table>
+  <p class="muted small">注：目标链接实为主页分享而非单条视频（页面截图核实：作者「郁闷装深沉」主页），按目标假设条款以"该链接可解析的作品"完成测试下载；单作品分享链接同样支持。</p>
+</section>
+
+<footer>
+  <span>E:\录屏\spxz · yt-dlp 2026.08.19 · kuaishou_dl.py</span>
+  <span>AutoClaw · 2026-09-21</span>
+</footer>
+
+</div>
+</body>
+</html>

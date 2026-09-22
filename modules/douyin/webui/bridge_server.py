@@ -400,9 +400,9 @@ async def h_index(req):
 
 async def h_planc_index(req):
     """方案C-明亮商务风首页（直接使用合并后的设计稿，逐字节原样）"""
-    return web.FileResponse(
-        os.path.join(ROOT, "方案C-明亮商务风", "01-首页工作台.html"),
-        headers={"Cache-Control": "no-cache"})
+    planc = os.path.normpath(os.path.join(
+        HERE, "..", "..", "..", "方案C-明亮商务风", "01-首页工作台.html"))
+    return web.FileResponse(planc, headers={"Cache-Control": "no-cache"})
 
 
 def make_app():
@@ -411,9 +411,13 @@ def make_app():
     app.router.add_get("/index.html", h_index)
     # 方案C设计稿直达路由（直接使用合并后的版本；项目根定位用 HERE 相对爬升，免疫 junction 路径差异）
     _planc_dir = os.path.normpath(os.path.join(HERE, "..", "..", "..", "方案C-明亮商务风"))
+    app.router.add_static("/plan-c/static/", _planc_dir)
     app.router.add_get("/plan-c", h_planc_index)
     app.router.add_get("/plan-c/", h_planc_index)
-    app.router.add_static("/plan-c/", _planc_dir)
+    # 页内相对链接（01.html ↔ 02.html 等）经重定向规则映射到 static/ 下
+    async def h_planc_redirect(req):
+        raise web.HTTPFound("/plan-c/static/" + req.match_info["name"])
+    app.router.add_get("/plan-c/{name}", h_planc_redirect)
     app.router.add_static("/assets/", os.path.join(HERE, "assets"))
     app.router.add_get("/docs/", lambda req: web.FileResponse(
         os.path.join(HERE, "docs", "assets", "arch-diagram.png")))

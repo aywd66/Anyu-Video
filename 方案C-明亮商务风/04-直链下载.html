@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  视频下载工具箱 · UI 设计方案 C（明亮商务风）· 04 直链下载 clawfetch
+  ----------------------------------------------------------------------------
+  设计意图：
+  1. clawfetch 有两种互斥用法——"下载"与"只解析直链"。用 segmented control 承载，
+     白底滑块 + 选中青碧，把"这是同一个工具的两个档位"讲清楚，避免做成两个页面。
+  2. 高级选项默认折叠：重试/超时/分段/并行/同名覆盖属于低频但高价值的参数，
+     折叠保证首屏干净；展开后为两列网格表单，符合后台配置页的阅读节奏。
+  3. 下载队列突出三个可信度信号：断点续传来源（"从 123.4MB 继续"）、多线程分段进度、
+     SHA-256 校验通过绿徽章。这三点是通用下载器与"能交付大文件的下载器"的分水岭。
+  4. 解析模式用表格式呈现真实直链 / 文件名 / 大小 / 续传支持，每行带复制按钮，
+     底部明确提示结果可粘贴到 IDM / aria2 —— 承认本模块常作为"链路探针"使用。
+  5. 退出码是脚本化调用方的第一文档，独立成折叠卡并锚点 #exitcode，9 码全列。
+  本页面为静态设计稿示意，所有 URL、文件、数值均为假设内容。
+  ============================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>直链下载 · 视频下载工具箱</title>
+<style>
+:root{
+  --bg:#FAF9F6;--card:#FFFFFF;
+  --primary:#0D9488;--primary-dark:#0F766E;--primary-light:#F0FDFA;
+  --text:#334155;--text-secondary:#64748B;
+  --accent:#F97316;--accent-dark:#EA580C;
+  --success:#059669;--danger:#E11D48;--warning:#D97706;
+  --border:#E2E8F0;--input-bg:#F8FAFC;
+  --radius-card:14px;--radius-ctl:10px;
+  --shadow-card:0 1px 3px rgba(15,23,42,.06), 0 8px 24px rgba(15,23,42,.05);
+  --shadow-card-hover:0 2px 6px rgba(15,23,42,.08), 0 16px 40px rgba(15,23,42,.10);
+  --shadow-bar:0 1px 2px rgba(15,23,42,.04), 0 4px 16px rgba(15,23,42,.06);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;font-size:14px;line-height:1.7;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit;cursor:pointer;border:none;background:none}
+input,select{font-family:inherit}
+
+/* ---------- 顶部通栏 ---------- */
+.topbar{position:sticky;top:0;z-index:50;height:68px;background:#fff;border-bottom:1px solid var(--border);box-shadow:var(--shadow-bar)}
+.topbar-inner{max-width:1200px;margin:0 auto;height:100%;padding:0 24px;display:flex;align-items:center;gap:24px}
+.brand{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.brand-mark{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,var(--primary),#2DD4BF);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(13,148,136,.28)}
+.brand-mark svg{width:19px;height:19px;stroke:#fff}
+.brand-name{font-size:16px;font-weight:700;color:#1E293B}
+.nav{display:flex;align-items:stretch;height:100%;gap:4px;margin-left:8px}
+.nav a{position:relative;display:flex;align-items:center;padding:0 14px;font-size:14px;color:var(--text-secondary);transition:color .2s}
+.nav a:hover{color:var(--primary)}
+.nav a.active{color:var(--primary);font-weight:600}
+.nav a.active::after{content:"";position:absolute;left:14px;right:14px;bottom:0;height:3px;border-radius:3px 3px 0 0;background:var(--primary)}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:12px}
+.icon-btn{width:36px;height:36px;border-radius:10px;border:1px solid var(--border);background:#fff;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);transition:all .2s}
+.icon-btn:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-light)}
+.avatar{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#CBD5E1,#94A3B8);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:#fff}
+.hamburger{display:none;width:36px;height:36px;border-radius:10px;border:1px solid var(--border);align-items:center;justify-content:center;color:var(--text)}
+.mobile-menu{display:none}
+
+/* ---------- 布局 & 卡片 ---------- */
+.container{max-width:1200px;margin:0 auto;padding:28px 24px 64px}
+.page-head{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:20px}
+.page-title{font-size:26px;font-weight:700;color:#0F172A;line-height:1.35}
+.page-desc{font-size:13px;color:var(--text-secondary);margin-top:4px}
+.head-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.section-title{font-size:17px;font-weight:600;color:#1E293B;display:flex;align-items:center;gap:10px}
+.section-title::before{content:"";width:4px;height:16px;border-radius:4px;background:var(--primary)}
+.section-hint{font-size:12px;color:var(--text-secondary);font-weight:400}
+.card{background:var(--card);border-radius:var(--radius-card);padding:24px;box-shadow:var(--shadow-card);transition:box-shadow .2s}
+.card:hover{box-shadow:var(--shadow-card-hover)}
+.card-head{display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap}
+.mt-20{margin-top:20px}
+
+/* ---------- 徽章 ---------- */
+.badge{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 11px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.badge .dotb{width:6px;height:6px;border-radius:50%;background:currentColor}
+.badge-ok{background:#ECFDF5;color:var(--success)}
+.badge-warn{background:#FFFBEB;color:var(--warning)}
+.badge-err{background:#FFF1F2;color:var(--danger)}
+.badge-run{background:var(--primary-light);color:var(--primary-dark)}
+.badge-mute{background:#F1F5F9;color:var(--text-secondary)}
+.link-muted{font-size:12px;color:var(--primary);font-weight:600}
+.link-muted:hover{text-decoration:underline}
+
+/* ---------- Segmented control ---------- */
+.seg-wrap{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:20px}
+.segmented{position:relative;display:inline-flex;background:#fff;border:1px solid var(--border);border-radius:12px;padding:4px;box-shadow:var(--shadow-card)}
+.seg-slider{position:absolute;top:4px;left:4px;height:calc(100% - 8px);width:calc(50% - 4px);background:var(--primary);border-radius:9px;transition:transform .22s cubic-bezier(.4,0,.2,1);box-shadow:0 2px 8px rgba(13,148,136,.3)}
+.segmented[data-mode="parse"] .seg-slider{transform:translateX(100%)}
+.seg-btn{position:relative;z-index:1;display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 22px;font-size:14px;font-weight:600;color:var(--text-secondary);transition:color .2s;background:none;border-radius:9px}
+.seg-btn.on{color:#fff}
+.seg-hint{font-size:12px;color:var(--text-secondary)}
+
+/* ---------- 按钮 ---------- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:38px;padding:0 18px;border-radius:var(--radius-ctl);font-size:14px;font-weight:600;transition:all .2s;white-space:nowrap}
+.btn-primary{background:var(--primary);color:#fff;box-shadow:0 2px 8px rgba(13,148,136,.24)}
+.btn-primary:hover{background:var(--primary-dark);box-shadow:0 4px 14px rgba(13,148,136,.34);transform:translateY(-1px)}
+.btn-accent{background:var(--accent);color:#fff;box-shadow:0 3px 10px rgba(249,115,22,.28)}
+.btn-accent:hover{background:var(--accent-dark);box-shadow:0 6px 18px rgba(249,115,22,.38);transform:translateY(-1px)}
+.btn-ghost{background:#fff;color:var(--text);border:1px solid var(--border)}
+.btn-ghost:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-light)}
+.btn-danger{background:#fff;color:var(--danger);border:1px solid #FBCFE8}
+.btn-danger:hover{background:#FFF1F2;border-color:var(--danger)}
+.btn-lg{height:46px;padding:0 28px;font-size:15px;border-radius:12px}
+.btn-sm{height:30px;padding:0 13px;font-size:12px;border-radius:8px}
+.btn-xs{height:26px;padding:0 10px;font-size:11px;border-radius:7px}
+
+/* ---------- 表单 ---------- */
+.field-label{font-size:13px;font-weight:600;color:var(--text);margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.field-label span{font-size:11px;font-weight:400;color:var(--text-secondary)}
+textarea.ta,input.line{width:100%;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-ctl);padding:12px 16px;font-size:13px;color:var(--text);transition:all .2s}
+textarea.ta{min-height:104px;resize:vertical;line-height:1.9;font-family:"SFMono-Regular",Consolas,"Courier New",monospace}
+textarea.ta::placeholder,input.line::placeholder{color:#94A3B8;font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+textarea.ta:focus,input.line:focus{outline:none;border-color:var(--primary);background:#fff;box-shadow:0 0 0 3px rgba(13,148,136,.14)}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px 20px}
+.form-item label{display:block;font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:6px}
+.form-item select,.form-item input[type=number]{width:100%;height:40px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-ctl);padding:0 12px;font-size:13px;color:var(--text);transition:all .2s}
+.form-item select:focus,.form-item input[type=number]:focus{outline:none;border-color:var(--primary);background:#fff;box-shadow:0 0 0 3px rgba(13,148,136,.14)}
+.form-unit{position:relative}
+.form-unit .suffix{position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:11px;color:#94A3B8;pointer-events:none}
+.form-unit select,.form-unit input{padding-right:40px!important}
+.switch-row{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--input-bg);grid-column:span 2}
+.switch{width:40px;height:22px;border-radius:999px;background:var(--primary);position:relative;flex-shrink:0;transition:background .2s}
+.switch::after{content:"";position:absolute;top:3px;right:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.24)}
+.switch.off{background:#CBD5E1}
+.switch.off::after{right:auto;left:3px}
+.switch-txt strong{display:block;font-size:13px;color:#1E293B;font-weight:600}
+.switch-txt span{font-size:11px;color:var(--text-secondary)}
+
+/* ---------- 折叠卡 ---------- */
+.collapse-head{display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
+.collapse-head .chev{margin-left:auto;width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);transition:transform .2s, background .2s}
+.collapse-head:hover .chev{background:var(--primary-light);color:var(--primary)}
+.collapse.open .chev{transform:rotate(180deg)}
+.collapse-body{display:none;margin-top:18px}
+.collapse.open .collapse-body{display:block}
+
+/* ---------- 队列 ---------- */
+.queue{display:flex;flex-direction:column;gap:14px}
+.q-item{border:1px solid var(--border);border-radius:12px;padding:16px;transition:all .2s}
+.q-item:hover{border-color:#99F6E4;background:#FCFEFE}
+.q-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.q-icon{width:34px;height:34px;border-radius:9px;background:var(--primary-light);color:var(--primary);display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
+.q-name{font-size:13px;font-weight:600;color:#1E293B;flex:1;min-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:"SFMono-Regular",Consolas,monospace}
+.q-size{font-size:12px;color:var(--text-secondary);font-family:"DIN Alternate","Segoe UI",sans-serif}
+.q-bar{height:8px;border-radius:999px;background:#EEF2F6;overflow:hidden;margin-top:12px}
+.q-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,var(--primary),#5EEAD4)}
+.q-fill.done{background:var(--success)}
+.q-meta{display:flex;align-items:center;gap:14px;margin-top:8px;font-size:11px;color:var(--text-secondary);flex-wrap:wrap}
+.q-meta .pct{font-family:"DIN Alternate","Segoe UI",sans-serif;font-size:13px;font-weight:700;color:var(--primary-dark)}
+.resume-note{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:11px;color:var(--primary-dark);background:var(--primary-light);border:1px solid #CCFBF1;border-radius:8px;padding:6px 10px;line-height:1.6}
+.hash-note{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:11px;color:var(--success);background:#ECFDF5;border:1px solid #A7F3D0;border-radius:8px;padding:6px 10px;flex-wrap:wrap}
+.hash-note code{font-family:"SFMono-Regular",Consolas,monospace;color:#065F46;background:#fff;border:1px solid #A7F3D0;border-radius:5px;padding:1px 6px;font-size:10px;word-break:break-all}
+
+/* ---------- 解析结果表 ---------- */
+table{width:100%;border-collapse:collapse}
+thead th{text-align:left;font-size:12px;font-weight:600;color:var(--text-secondary);padding:0 12px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+tbody td{padding:13px 12px;border-bottom:1px solid #F1F5F9;font-size:13px;vertical-align:middle}
+tbody tr:last-child td{border-bottom:none}
+tbody tr{transition:background .15s}
+tbody tr:hover{background:var(--primary-light)}
+.mono{font-family:"SFMono-Regular",Consolas,monospace;font-size:11px;color:var(--text-secondary);word-break:break-all}
+.fname{font-family:"SFMono-Regular",Consolas,monospace;font-size:12px;color:#1E293B;font-weight:500;word-break:break-all}
+.size-strong{font-family:"DIN Alternate","Segoe UI",sans-serif;font-size:15px;font-weight:700;color:#0F172A}
+.tbl-wrap{overflow-x:auto}
+.foot-tip{display:flex;align-items:center;gap:10px;margin-top:18px;padding:12px 16px;background:var(--input-bg);border:1px dashed var(--border);border-radius:12px;font-size:12px;color:var(--text-secondary)}
+.foot-tip b{color:var(--text)}
+
+/* ---------- 退出码表 ---------- */
+.code-tag{display:inline-flex;align-items:center;justify-content:center;min-width:34px;height:24px;padding:0 8px;border-radius:7px;font-family:"DIN Alternate","Segoe UI",sans-serif;font-size:13px;font-weight:700}
+.c-ok{background:#ECFDF5;color:var(--success)}
+.c-warn{background:#FFFBEB;color:var(--warning)}
+.c-err{background:#FFF1F2;color:var(--danger)}
+.c-mute{background:#F1F5F9;color:var(--text-secondary)}
+.mode-hide{display:none!important}
+
+@media (max-width:1279px){
+  .grid-2{grid-template-columns:1fr}
+  .switch-row{grid-column:span 1}
+}
+@media (max-width:375px){
+  .topbar-inner{padding:0 16px;gap:12px}
+  .nav{display:none}
+  .hamburger{display:flex}
+  .topbar-right .icon-btn,.topbar-right .avatar{display:none}
+  .mobile-menu.open{display:block;position:absolute;top:68px;left:0;right:0;background:#fff;border-bottom:1px solid var(--border);box-shadow:var(--shadow-bar);padding:8px 16px 16px}
+  .mobile-menu a{display:block;padding:12px 4px;font-size:14px;border-bottom:1px solid #F1F5F9}
+  .mobile-menu a.active{color:var(--primary);font-weight:600}
+  .container{padding:20px 16px 48px}
+  .page-title{font-size:21px}
+  .head-right{margin-left:0;width:100%}
+  .card{padding:18px}
+  .segmented{width:100%}
+  .seg-btn{flex:1;padding:0 10px;justify-content:center}
+  .btn-lg{width:100%}
+  table{min-width:620px}
+  .q-name{min-width:120px}
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="01-首页工作台.html">
+      <span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M4 20h16"/></svg></span>
+      <span class="brand-name">视频下载工具箱</span>
+    </a>
+    <nav class="nav">
+      <a href="01-首页工作台.html">工作台</a>
+      <a href="02-抖音下载.html">抖音下载</a>
+      <a href="03-快手下载.html">快手下载</a>
+      <a href="04-直链下载.html" class="active">直链下载</a>
+      <a href="05-任务与记录中心.html">任务记录</a>
+    </nav>
+    <div class="topbar-right">
+      <button class="icon-btn" title="帮助"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9.2 9.3a2.9 2.9 0 015.6 1c0 1.9-2.8 2.4-2.8 2.4"/><path d="M12 17h.01"/></svg></button>
+      <span class="avatar" title="本地账户">DL</span>
+      <button class="hamburger" id="hamBtn" aria-label="打开菜单"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    </div>
+  </div>
+  <div class="mobile-menu" id="mobileMenu">
+    <a href="01-首页工作台.html">工作台</a>
+    <a href="02-抖音下载.html">抖音下载</a>
+    <a href="03-快手下载.html">快手下载</a>
+    <a href="04-直链下载.html" class="active">直链下载</a>
+    <a href="05-任务与记录中心.html">任务记录</a>
+  </div>
+</header>
+
+<main class="container">
+
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">直链下载 clawfetch</h1>
+      <p class="page-desc">任意 http / https 直链：断点续传、失败重试、多线程分段、SHA-256 校验，全程写入 JSONL 台账。</p>
+    </div>
+    <div class="head-right">
+      <!-- 假设：clawfetch v2.4.1 -->
+      <span class="badge badge-ok"><span class="dotb"></span>v2.4.1 就绪</span>
+      <a class="link-muted" href="#exitcode">退出码说明</a>
+    </div>
+  </div>
+
+  <!-- 模式切换 -->
+  <div class="seg-wrap">
+    <div class="segmented" id="segmented" data-mode="download">
+      <span class="seg-slider"></span>
+      <button class="seg-btn on" data-target="dl">⬇ 下载模式</button>
+      <button class="seg-btn" data-target="parse">🔍 解析模式</button>
+    </div>
+    <span class="seg-hint" id="segHint">下载模式：完整拉取文件并校验哈希</span>
+  </div>
+
+  <!-- ============ 下载模式 ============ -->
+  <div id="panel-dl">
+
+    <section class="card">
+      <div class="card-head">
+        <h2 class="section-title">链接输入<span class="section-hint">每行一条，支持批量</span></h2>
+        <div style="margin-left:auto;display:flex;gap:10px">
+          <button class="btn btn-ghost btn-sm">导入 TXT / JSONL</button>
+          <button class="btn btn-ghost btn-sm">清空</button>
+        </div>
+      </div>
+      <label class="field-label" for="urls">直链列表 <span>已识别 3 条，其中 1 条支持 Range 续传</span></label>
+      <textarea id="urls" class="ta" placeholder="https://example.com/files/package.tar.gz&#10;https://cdn.example.org/video/ep-01.mp4">https://cdn.example.org/datasets/dataset-v3.tar.gz
+https://mirror.example.net/tools/clawfetch-2.4.1-win-x64.zip
+https://files.example.edu/course/lecture-01.mp4</textarea>
+      <div class="actions-row" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:20px;padding-top:20px;border-top:1px dashed var(--border)">
+        <button class="btn btn-accent btn-lg">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M4 20h16"/></svg>
+          开始下载（3）
+        </button>
+        <button class="btn btn-ghost btn-lg">加入队列稍后执行</button>
+        <div style="margin-left:auto;font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:6px">保存位置：<code style="background:var(--input-bg);border:1px solid var(--border);border-radius:6px;padding:2px 8px;font-size:11px">D:\Downloads\直链</code><a class="link-muted" href="#">更改</a></div>
+      </div>
+    </section>
+
+    <!-- 高级选项（折叠） -->
+    <section class="card collapse mt-20" id="advCard">
+      <div class="collapse-head" data-toggle="advCard">
+        <h2 class="section-title">高级选项<span class="section-hint">重试 / 超时 / 分段 / 并行 / 同名策略</span></h2>
+        <span class="chev">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+        </span>
+      </div>
+      <div class="collapse-body">
+        <div class="grid-2">
+          <div class="form-item">
+            <label for="retry">失败重试次数</label>
+            <div class="form-unit"><input id="retry" type="number" value="3"><span class="suffix">次</span></div>
+          </div>
+          <div class="form-item">
+            <label for="timeout">单请求超时</label>
+            <div class="form-unit"><input id="timeout" type="number" value="30"><span class="suffix">秒</span></div>
+          </div>
+          <div class="form-item">
+            <label for="seg">分段数（多线程切片）</label>
+            <div class="form-unit"><select id="seg"><option>1（顺序下载）</option><option selected>4 段</option><option>8 段</option><option>16 段</option></select></div>
+          </div>
+          <div class="form-item">
+            <label for="par">队列并行数</label>
+            <div class="form-unit"><select id="par"><option>1</option><option selected>2</option><option>4</option><option>8</option></select></div>
+          </div>
+          <div class="form-item">
+            <label for="ua">自定义 User-Agent</label>
+            <input id="ua" type="text" value="clawfetch/2.4.1 (+https://local.tool)">
+          </div>
+          <div class="form-item">
+            <label for="hash">期望 SHA-256（可选）</label>
+            <input id="hash" type="text" placeholder="留空则仅计算不比对">
+          </div>
+          <div class="switch-row">
+            <span class="switch off" title="开关：灰为关闭"></span>
+            <div class="switch-txt">
+              <strong>同名文件覆盖</strong>
+              <span>关闭时自动追加序号（如 file (2).mp4）；开启后直接替换旧文件，不可恢复。</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 下载队列 -->
+    <section class="card mt-20">
+      <div class="card-head">
+        <h2 class="section-title">下载队列<span class="section-hint">3 个任务 · 并行 2</span></h2>
+        <div style="margin-left:auto;display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm">全部暂停</button>
+          <button class="btn btn-danger btn-sm">终止队列</button>
+        </div>
+      </div>
+      <!-- 假设：以下三个任务及其字节数为示意 -->
+      <div class="queue">
+        <div class="q-item">
+          <div class="q-top">
+            <span class="q-icon">📦</span>
+            <span class="q-name">dataset-v3.tar.gz</span>
+            <span class="q-size">381.6 MB</span>
+            <span class="badge badge-run"><span class="dotb"></span>下载中</span>
+          </div>
+          <div class="q-bar"><div class="q-fill" style="width:57%"></div></div>
+          <div class="q-meta">
+            <span class="pct">57%</span><span>218.4 MB / 381.6 MB</span><span>速度 6.2 MB/s</span><span>4 段并行</span><span>剩余 26s</span>
+          </div>
+          <div class="resume-note">↻ 断点续传：检测到上次未完成分片，从 123.4 MB 处继续（服务端支持 Range）。</div>
+        </div>
+
+        <div class="q-item">
+          <div class="q-top">
+            <span class="q-icon">✅</span>
+            <span class="q-name">clawfetch-2.4.1-win-x64.zip</span>
+            <span class="q-size">18.9 MB</span>
+            <span class="badge badge-ok"><span class="dotb"></span>已完成</span>
+          </div>
+          <div class="q-bar"><div class="q-fill done" style="width:100%"></div></div>
+          <div class="q-meta"><span class="pct" style="color:var(--success)">100%</span><span>耗时 4s</span><span>重试 0 次</span><a class="link-muted" href="#">打开位置</a></div>
+          <div class="hash-note">
+            <span>✓ SHA-256 校验通过</span>
+            <code>9f2c41ab77e0d5b3c88a1f6e4d2b70c9a5e18d3f6c02b417ae9d5c3f81b06e2a</code>
+          </div>
+        </div>
+
+        <div class="q-item">
+          <div class="q-top">
+            <span class="q-icon">❌</span>
+            <span class="q-name">lecture-01.mp4</span>
+            <span class="q-size">未知大小</span>
+            <span class="badge badge-err"><span class="dotb"></span>失败 · exit=5</span>
+          </div>
+          <div class="q-bar"><div class="q-fill" style="width:8%;opacity:.4;background:var(--danger)"></div></div>
+          <div class="q-meta"><span class="pct" style="color:var(--danger)">8%</span><span>3.1 MB / ?</span><span>HTTP 403 Forbidden</span><span>已重试 3 次</span></div>
+          <div class="resume-note" style="color:var(--danger);background:#FFF1F2;border-color:#FECDD3">该地址需要 Referer 或已过期，请重新获取直链后重试。<a class="link-muted" style="margin-left:auto" href="#">立即重试</a></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============ 解析模式 ============ -->
+  <div id="panel-parse" class="mode-hide">
+    <section class="card">
+      <div class="card-head">
+        <h2 class="section-title">解析结果<span class="section-hint">只探测链路，不落地文件</span></h2>
+        <div style="margin-left:auto;display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm">复制全部</button>
+          <button class="btn btn-primary btn-sm">导出 JSONL</button>
+        </div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr><th style="width:34%">真实直链</th><th style="width:24%">文件名</th><th style="width:12%">大小</th><th style="width:14%">续传支持</th><th style="width:16%">操作</th></tr>
+          </thead>
+          <tbody>
+            <!-- 假设：以下为三条示例链接的解析结果 -->
+            <tr>
+              <td class="mono">https://cdn.example.org/datasets/dataset-v3.tar.gz?sign=8d21f0&exp=1789200000</td>
+              <td class="fname">dataset-v3.tar.gz</td>
+              <td><span class="size-strong">381.6</span> <span style="font-size:11px;color:var(--text-secondary)">MB</span></td>
+              <td><span class="badge badge-ok" style="height:22px"><span class="dotb"></span>支持 Range</span></td>
+              <td><button class="btn btn-ghost btn-xs">复制链接</button></td>
+            </tr>
+            <tr>
+              <td class="mono">https://mirror.example.net/tools/releases/clawfetch-2.4.1-win-x64.zip</td>
+              <td class="fname">clawfetch-2.4.1-win-x64.zip</td>
+              <td><span class="size-strong">18.9</span> <span style="font-size:11px;color:var(--text-secondary)">MB</span></td>
+              <td><span class="badge badge-ok" style="height:22px"><span class="dotb"></span>支持 Range</span></td>
+              <td><button class="btn btn-ghost btn-xs">复制链接</button></td>
+            </tr>
+            <tr>
+              <td class="mono">https://files.example.edu/course/lecture-01.mp4（302 → oss.example.edu/vod/…）</td>
+              <td class="fname">lecture-01.mp4</td>
+              <td><span class="size-strong">—</span> <span style="font-size:11px;color:var(--text-secondary)">未声明</span></td>
+              <td><span class="badge badge-warn" style="height:22px"><span class="dotb"></span>不支持</span></td>
+              <td><button class="btn btn-ghost btn-xs">复制链接</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="foot-tip">
+        <span>💡</span>
+        <span>结果可直接粘贴到 <b>IDM / aria2 / Thunder</b> 等第三方下载器；不支持 Range 的地址无法断点续传，建议单次连续下载。</span>
+      </div>
+    </section>
+  </div>
+
+  <!-- 退出码说明 -->
+  <section class="card collapse mt-20" id="exitcode">
+    <div class="collapse-head" data-toggle="exitcode">
+      <h2 class="section-title">退出码体系<span class="section-hint">脚本化调用与 CI 场景对照表</span></h2>
+      <span class="chev">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+      </span>
+    </div>
+    <div class="collapse-body">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th style="width:12%">退出码</th><th style="width:22%">含义</th><th>典型原因与建议处理</th></tr></thead>
+          <tbody>
+            <tr><td><span class="code-tag c-ok">0</span></td><td><b>成功</b></td><td>文件完整落盘且（若提供）哈希比对通过。</td></tr>
+            <tr><td><span class="code-tag c-warn">2</span></td><td>参数错误</td><td>命令行拼写或取值非法，如分段数为 0；检查调用参数后重试。</td></tr>
+            <tr><td><span class="code-tag c-warn">3</span></td><td>无效链接</td><td>URL 协议非 http/https 或无法解析主机名；确认链接是否被截断。</td></tr>
+            <tr><td><span class="code-tag c-err">4</span></td><td>连接失败</td><td>DNS / TCP / TLS 建连阶段失败，常见于代理与网络抖动；可加重试。</td></tr>
+            <tr><td><span class="code-tag c-err">5</span></td><td>HTTP 错误</td><td>4xx / 5xx 响应，如 403 需 Referer、404 资源不存在、416 续传区间越界。</td></tr>
+            <tr><td><span class="code-tag c-warn">6</span></td><td>超时</td><td>超过「单请求超时」仍未收到完整数据；大文件建议调大超时或降低分段数。</td></tr>
+            <tr><td><span class="code-tag c-err">7</span></td><td>校验失败</td><td>SHA-256 与期望值不一致，文件可能损坏；默认不删除以便人工排查。</td></tr>
+            <tr><td><span class="code-tag c-err">8</span></td><td>磁盘错误</td><td>空间不足、路径无写权限或目标被占用；清理空间或更换目录。</td></tr>
+            <tr><td><span class="code-tag c-mute">130</span></td><td>用户中断</td><td>Ctrl+C 或界面「终止」；已完成分片保留，可断点续传。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="foot-tip">
+        <span>⌨️</span>
+        <span>命令行等价写法：<b>clawfetch &lt;url&gt; -o &lt;dir&gt; --retry 3 --timeout 30 --segments 4 --sha256 &lt;hash&gt;</b>；JSONL 台账逐行记录 url、file、bytes、exit。</span>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+document.getElementById('hamBtn').addEventListener('click', function () {
+  document.getElementById('mobileMenu').classList.toggle('open');
+});
+
+// Segmented control：下载 / 解析 模式切换
+var seg = document.getElementById('segmented');
+var hint = document.getElementById('segHint');
+var hints = { download: '下载模式：完整拉取文件并校验哈希', parse: '解析模式：仅获取真实直链、文件名、大小与续传支持，不下载' };
+document.querySelectorAll('.seg-btn').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var target = btn.dataset.target;
+    document.querySelectorAll('.seg-btn').forEach(function (b) { b.classList.remove('on'); });
+    btn.classList.add('on');
+    seg.dataset.mode = target === 'parse' ? 'parse' : 'download';
+    document.getElementById('panel-dl').classList.toggle('mode-hide', target !== 'download');
+    document.getElementById('panel-parse').classList.toggle('mode-hide', target !== 'parse');
+    hint.textContent = hints[target];
+  });
+});
+
+// 折叠卡
+document.querySelectorAll('.collapse-head').forEach(function (h) {
+  h.addEventListener('click', function () { document.getElementById(h.dataset.toggle).classList.toggle('open'); });
+});
+// 默认展开高级选项与退出码，便于设计稿评审
+document.getElementById('advCard').classList.add('open');
+document.getElementById('exitcode').classList.add('open');
+
+// 开关视觉切换
+document.querySelectorAll('.switch').forEach(function (s) {
+  s.addEventListener('click', function () { s.classList.toggle('off'); });
+});
+</script>
+</body>
+</html>

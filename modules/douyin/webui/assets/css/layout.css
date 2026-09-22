@@ -364,6 +364,34 @@
   .side-section:has(#account-card) { display: none; }
 }
 
+/* ---------- 顶栏分级收纳（显式类名，不依赖 :has()） ----------
+ * 关键机制：内容总宽不足时优先「去文字留图标」而非 flex 硬压缩
+ * （flex 收缩会把按钮内容溢出绘制到相邻区块上，正是截断根因）
+ * 1240px：隐账号卡+数据卡；1100px：隐动作区；980px：平台钮只留图标
+ * 900px：回移动折叠布局（折行显示全部） */
+@media (max-width: 1500px) {
+  .side-section--account { display: none; }
+}
+
+@media (max-width: 1240px) {
+  .side-section--account,
+  .side-section--mode { display: none; }
+  /* 平台钮改紧凑描边样式，只留图标（文字完整移除而非被裁） */
+  .platform-btn__label { display: none; }
+  .platform-btn { padding: 0 10px; }
+  .platform-btn .i { margin: 0; }
+}
+
+@media (max-width: 1100px) {
+  .side-actions { display: none; }
+}
+
+@media (max-width: 1240px) {
+  /* 菜单允许收缩滚动（不裁文字，滚看全部） */
+  .nav { overflow-x: auto; }
+  .nav__item { flex: none; }
+}
+
 @media (max-width: 1180px) {
   :root { --content-max: 100%; }
   .side-actions .btn span { display: none; }
@@ -402,8 +430,14 @@
   .nav__item { padding: 6px 10px; font-size: 12.5px; }
   .nav__item.is-active::after { left: 10px; right: 10px; bottom: -4px; height: 2px; }
 
-  .side-actions { margin-left: 0; }
+  .side-actions { margin-left: 0; display: flex; }
   .side-footer { display: none; }
+  /* 移动式折叠：收纳的区块恢复显示（布局折行不挤压） */
+  .side-section--account,
+  .side-section--mode { display: flex; }
+  .side-actions { display: flex; }
+  .platform-btn__label { display: inline; }
+  .platform-btn__dot { display: none; }
 
   .content { padding: var(--sp-4); }
   .page-title { font-size: 22px; }

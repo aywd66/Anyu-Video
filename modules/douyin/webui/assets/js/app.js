@@ -89,12 +89,12 @@
           '<div class="platform-switch" role="tablist" aria-label="平台切换">' +
           cfg.NAV.platforms.map((p) =>
             '<button class="platform-btn" role="tab" data-dot="' + esc(p.dot) + '" data-platform-id="' + esc(p.id) + '" ' +
-            'aria-selected="false"><span class="platform-btn__dot"></span>' + I.icon(p.icon, 16) + esc(p.label) + '</button>'
+            'aria-selected="false"><span class="platform-btn__dot"></span>' + I.icon(p.icon, 16) + '<span class="platform-btn__label">' + esc(p.label) + '</span></button>'
           ).join('') +
           '</div>' +
           '<div class="platform-sub" id="platform-sub"></div>' +
         '</div>' +
-        '<div class="side-section">' +
+        '<div class="side-section side-section--account">' +
           '<div class="side-card" id="account-card"></div>' +
         '</div>' +
         '<div class="side-section side-section--menu">' + menuHtml + '</div>' +
@@ -104,7 +104,7 @@
             '<button class="btn btn--ghost btn--sm" id="btn-netdiag">' + I.icon('activity', 15) + '网络诊断</button>' +
           '</div>' +
         '</div>' +
-        '<div class="side-section">' +
+        '<div class="side-section side-section--mode">' +
           '<div class="side-card">' +
             '<div class="side-card__icon">' + I.icon('database', 17) + '</div>' +
             '<div class="side-card__body">' +

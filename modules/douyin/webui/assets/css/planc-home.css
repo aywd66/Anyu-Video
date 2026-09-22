@@ -1,0 +1,135 @@
+/* ============================================================
+ * planc-home.css — 工作台首页（方案C 01 设计 × 真实数据）
+ * ------------------------------------------------------------
+ * 依赖 tokens.css 既有 --bb-* 变量；仅本页使用的组件：
+ * hero 横幅 / 健康卡 / 模块入口卡 / 概览统计卡 / 运行日志
+ * ============================================================ */
+
+/* ---------- 欢迎横幅 ---------- */
+.hero {
+  position: relative; overflow: hidden;
+  background: linear-gradient(120deg, var(--bb-primary) 0%, #0F766E 42%, #5EEAD4 100%);
+  border-radius: var(--bb-r-card);
+  padding: 36px 40px; color: #fff;
+  box-shadow: 0 10px 34px rgba(13, 148, 136, .24);
+}
+.hero::after {
+  content: ""; position: absolute; right: -90px; top: -110px;
+  width: 320px; height: 320px; border-radius: 50%;
+  background: rgba(255, 255, 255, .10);
+}
+.hero::before {
+  content: ""; position: absolute; right: 120px; bottom: -140px;
+  width: 220px; height: 220px; border-radius: 50%;
+  background: rgba(255, 255, 255, .07);
+}
+.hero h1 { font-size: 26px; font-weight: 700; line-height: 1.4; position: relative; z-index: 1; color: #fff; }
+.hero p { font-size: 14px; line-height: 1.7; opacity: .92; margin-top: 10px; max-width: 640px; position: relative; z-index: 1; color: #fff; }
+.hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; position: relative; z-index: 1; }
+.hero-meta { display: flex; gap: 26px; margin-top: 26px; position: relative; z-index: 1; flex-wrap: wrap; }
+.hero-meta div { font-size: 12px; opacity: .9; color: #fff; }
+.hero-meta strong { display: block; font-size: 19px; font-weight: 700; font-family: var(--bb-font-num); opacity: 1; }
+
+.btn-hero { background: #fff; color: var(--bb-primary-dark); height: 42px; padding: 0 22px; box-shadow: 0 4px 14px rgba(15, 23, 42, .14); }
+.btn-hero:hover { transform: translateY(-1px); box-shadow: 0 8px 22px rgba(15, 23, 42, .2); }
+.btn-hero-line { background: rgba(255, 255, 255, .14); color: #fff; border: 1px solid rgba(255, 255, 255, .5); height: 42px; padding: 0 22px; }
+.btn-hero-line:hover { background: rgba(255, 255, 255, .24); }
+
+/* ---------- 环境健康卡 ---------- */
+.health-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.health-item {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+  transition: all var(--t-fast);
+}
+.health-item:hover { border-color: var(--bb-hover-teal); background: var(--bb-primary-light); }
+.health-body { min-width: 0; }
+.health-name { font-size: 14px; font-weight: 600; color: var(--bb-heading); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.health-desc { font-size: 12px; color: var(--muted); line-height: 1.6; margin-top: 4px; }
+.health-link { font-size: 12px; color: var(--bb-primary); font-weight: 600; margin-top: 6px; display: inline-block; cursor: pointer; }
+.health-link:hover { text-decoration: underline; }
+
+/* ---------- 模块入口卡 ---------- */
+.module-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.module-card {
+  background: var(--panel); border-radius: var(--bb-r-card); padding: 24px;
+  box-shadow: var(--bb-shadow-card); display: flex; flex-direction: column;
+  transition: box-shadow var(--t-fast), transform var(--t-fast); border: 1px solid transparent;
+}
+.module-card:hover { box-shadow: var(--bb-shadow-card-hover); transform: translateY(-3px); border-color: #CCFBF1; }
+.module-icon { width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 22px; }
+.ic-dy { background: linear-gradient(135deg, #EDE9FE, #DDD6FE); }
+.ic-ks { background: linear-gradient(135deg, #FFEDD5, #FED7AA); }
+.ic-fl { background: linear-gradient(135deg, var(--bb-primary-light), #CCFBF1); }
+.module-name { font-size: 17px; font-weight: 600; color: var(--bb-heading); margin-top: 16px; }
+.module-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.module-desc { font-size: 13px; color: var(--text); line-height: 1.7; margin-top: 12px; flex: 1; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.tag {
+  display: inline-flex; align-items: center; height: 22px; padding: 0 10px; border-radius: var(--bb-r-pill);
+  font-size: 11px; color: var(--muted); background: var(--panel-2); border: 1px solid var(--line);
+}
+.module-foot { margin-top: 18px; display: flex; gap: 10px; align-items: center; }
+
+/* ---------- 数据概览（Plan-C 统计卡） ---------- */
+.stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+.stat-card {
+  position: relative; background: var(--panel); border-radius: var(--bb-r-card);
+  padding: 22px 24px; box-shadow: var(--bb-shadow-card); overflow: hidden;
+  transition: box-shadow var(--t-fast), transform var(--t-fast);
+}
+.stat-card:hover { box-shadow: var(--bb-shadow-card-hover); transform: translateY(-2px); }
+.stat-icon {
+  position: absolute; right: 18px; top: 18px; width: 40px; height: 40px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; font-size: 17px;
+}
+.si-teal { background: var(--bb-primary-light); color: var(--bb-primary); }
+.si-green { background: var(--bb-success-soft); color: var(--bb-success); }
+.si-red { background: var(--bb-danger-soft); color: var(--bb-danger); }
+.si-slate { background: #F1F5F9; color: var(--muted); }
+.stat-value-big {
+  font-family: var(--bb-font-num); font-size: 32px; font-weight: 700;
+  line-height: 1.15; color: var(--bb-text-strong); letter-spacing: .5px;
+}
+.stat-value-big small { font-size: 15px; font-weight: 600; color: var(--muted); margin-left: 3px; }
+.stat-caption { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.stat-bar { height: 5px; border-radius: var(--bb-r-pill); background: #EEF2F6; overflow: hidden; margin-top: 12px; }
+.stat-bar i { display: block; height: 100%; border-radius: var(--bb-r-pill); }
+.stat-foot { font-size: 11px; color: var(--muted); margin-top: 8px; }
+
+/* ---------- 运行日志 ---------- */
+.log-box {
+  background: var(--bb-input-bg); border: 1px solid var(--line); border-radius: 12px;
+  padding: 18px 20px; max-height: 280px; overflow: auto;
+}
+.log-line {
+  display: flex; gap: 12px; font-family: var(--bb-font-mono);
+  font-size: 12px; line-height: 1.9; white-space: pre-wrap; word-break: break-all;
+}
+.log-time { color: var(--faint); flex-shrink: 0; }
+.log-info { color: var(--text); }
+.log-ok { color: var(--bb-success); }
+.log-warn { color: var(--bb-warning); }
+.log-err { color: var(--bb-danger); }
+.log-tag { color: var(--bb-primary); font-weight: 600; }
+
+/* ---------- 响应式 ---------- */
+@media (max-width: 1279px) {
+  .stat-grid { grid-template-columns: repeat(2, 1fr); }
+  .module-grid { grid-template-columns: repeat(2, 1fr); }
+  .health-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .stat-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 375px) {
+  .hero { padding: 26px 22px; }
+  .hero h1 { font-size: 21px; }
+  .stat-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .stat-card { padding: 16px; }
+  .stat-value-big { font-size: 24px; }
+  .stat-icon { width: 30px; height: 30px; font-size: 14px; right: 12px; top: 12px; }
+  .module-grid { grid-template-columns: 1fr; gap: 14px; }
+  .btn-hero, .btn-hero-line { width: 100%; }
+  .card { padding: 18px; }
+}

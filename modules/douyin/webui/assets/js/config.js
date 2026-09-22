@@ -20,26 +20,28 @@
 
     /* —— 导航结构（对照参考界面的侧边栏分组） —— */
     NAV: {
-      /* 平台分段控件：点击切换三个平台工作台 */
+      /* 顶部导航（合并后的工作台首页在首位，作为默认页） */
       platforms: [
-        { id: 'douyin',  label: '抖音',    icon: 'download', dot: 'pink',  default: true, sub: '视频 · 图集 · 主页 · 合集' },
-        { id: 'tiktok',  label: 'TikTok',  icon: 'tiktok',   dot: 'cyan',  sub: 'Video · Photo · Profile' },
-        { id: 'youtube', label: 'YouTube', icon: 'youtube',  dot: 'red',   sub: 'Videos · Shorts · Playlists' },
+        { id: 'planc-home', label: '工作台',    icon: 'bolt',     dot: 'amber', default: true, sub: '合并首页 · 环境健康与概览' },
+        { id: 'douyin',     label: '抖音下载',  icon: 'tiktok',   dot: 'pink',  sub: '视频 · 图集 · 主页 · 合集' },
+        { id: 'tiktok',     label: 'TikTok',    icon: 'globe',    dot: 'cyan',  sub: 'Video · Photo · Profile' },
+        { id: 'youtube',    label: 'YouTube',   icon: 'youtube',  dot: 'red',   sub: 'Videos · Shorts · Playlists' },
       ],
-      /* 侧边栏菜单（group = 分组小标签） */
+      /* 顶部菜单（方案C 顶栏五项 + 设置） */
       menu: [
-        { id: 'creators',  label: '关注',        icon: 'users',    group: '账号内容' },
-        { id: 'favorites', label: '收藏与喜欢',  icon: 'bookmark', group: '账号内容' },
-        { id: 'douyin',    label: '链接下载',    icon: 'download', group: '下载与管理', mirrorPlatform: true },
-        { id: 'queue',     label: '多链排队',    icon: 'layers',   group: '下载与管理' },
-        { id: 'tasks',     label: '任务中心',    icon: 'tasks',    group: '下载与管理', badge: true },
-        { id: 'archive',   label: '作品档案',    icon: 'clock',    group: '下载与管理' },
+        { id: 'douyin',    label: '抖音下载',    icon: 'download', group: '下载' },
+        { id: 'queue',     label: '多链排队',    icon: 'layers',   group: '下载' },
+        { id: 'tasks',     label: '任务中心',    icon: 'tasks',    group: '记录', badge: true },
+        { id: 'archive',   label: '任务记录',    icon: 'clock',    group: '记录' },
+        { id: 'creators',  label: '关注管理',    icon: 'users',    group: '记录' },
+        { id: 'favorites', label: '收藏与喜欢',  icon: 'bookmark', group: '记录' },
         { id: 'settings',  label: '设置',        icon: 'settings', group: '系统' },
       ],
       /* 平台页与菜单项互为镜像时，菜单显示的平台归属 */
       platformLabel: { douyin: '抖音', tiktok: 'TikTok', youtube: 'YouTube' },
-      /* 各平台账号卡文案（侧边栏随平台切换） */
+      /* 各平台账号卡文案（侧边栏随平台切换；工作台首页无账号概念，回退到抖音文案） */
       account: {
+        'planc-home': { name: '本地工作台', meta: '数据就绪', metaTone: 'green', icon: 'bolt' },
         douyin:  { name: '抖音账号',   meta: '已登录',           metaTone: 'green', icon: 'users' },
         tiktok:  { name: 'TikTok',     meta: '公开内容无需登录', metaTone: 'cyan',  icon: 'globe' },
         youtube: { name: 'YouTube 账号', meta: '已验证',          metaTone: 'green', icon: 'youtube' },

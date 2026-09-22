@@ -89,6 +89,7 @@ class Toolbox:
                  font=("Microsoft YaHei", 9, "bold")).pack(anchor="w", pady=(2, 2))
         btn(left, "▶ 抖音下载器（交互命令行）", self.dy_cli, "粘贴抖音链接批量下载视频/图集；支持登录、增量、多模式")
         btn(left, "▶ 抖音 WebUI（浏览器界面）", self.dy_webui, "本地网页界面，查看库、发起下载（127.0.0.1:8518）")
+        btn(left, "🎨 方案C 界面（明亮商务风）", self.dy_planc, "直接使用合并后的方案C页面（需 WebUI 服务在运行；开机自启）")
         btn(left, "打开抖音下载目录", lambda: _open(os.path.join(HERE, "downloads", "douyin")))
         sep()
         tk.Label(left, text="— 快手（模块 2）—", fg=self.C_PRIMARY_DARK, bg=self.C_BG,
@@ -154,6 +155,13 @@ class Toolbox:
             cwd=os.path.join(MODULES, "douyin"),
             after=lambda: self._open_browser("http://127.0.0.1:8518"),
         )
+
+    def dy_planc(self):
+        """直接打开合并后的方案C界面（常驻服务 /plan-c 直达）"""
+        import webbrowser
+        self.say("打开方案C界面：http://127.0.0.1:8518/plan-c")
+        threading.Timer(0.5, lambda: webbrowser.open("http://127.0.0.1:8518/plan-c")).start()
+        self.say("提示：服务由计划任务 DouzyWebUI 常驻；若未运行，先点「抖音 WebUI」或执行 ops\\deploy-douzy-webui.ps1 -Restart")
 
     # ---------- 快手 ----------
     def ks_gui(self):

@@ -11,6 +11,7 @@
 每个功能调用对应模块的启动脚本，模块之间互不依赖，可单独运行。
 """
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -33,6 +34,14 @@ def _py(name):
 
 def _pyw(name):
     return os.path.join(RUNTIME, name, "Scripts", "pythonw.exe")
+
+
+# 启动子进程时统一隐藏控制台窗口。
+# 工具箱自身以 pythonw 无窗口方式运行，如果子进程不隐藏窗口，桌面上就会冒出黑窗口。
+# 起因：_run_script 曾同时使用 stdout=PIPE 与 CREATE_NEW_CONSOLE，输出去向是界面日志窗格，
+# 却还留下一个空白控制台；且那个窗口被误关时会连带杀掉子进程（CTRL_CLOSE_EVENT）。
+# 已逐个核实被启动的模块都不读 stdin，隐藏控制台不影响功能。
+NOWINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
 
 def _open(path):
@@ -215,9 +224,32 @@ class Toolbox:
 
     # ---------- 抖音 ----------
     def dy_cli(self):
+        """抖音下载器：先在界面里收链接，再用无窗口方式跑。
+
+        为什么不直接把 launcher.py 的交互循环放起来：那个循环靠 input() 读终端，
+        而工具箱现在是无控制台启动（pythonw），子进程又用了 CREATE_NO_WINDOW，
+        隐藏控制台之后 input() 会立刻 EOF —— 用户根本没法粘贴链接。
+        好在 launcher.py 同样接受把链接当命令行参数传（内部走同一个 extract_urls），
+        所以改成「界面收文本 → 带参数启动」：既不弹终端，也不丢功能，
+        而且一次可以粘多个链接，比原来「提示在界面、输入在黑窗口」更顺。
+        """
+        text = self._ask_text(
+            "抖音下载器",
+            "粘贴抖音链接或分享口令（可一次粘多个，用空格或换行分隔）：\n"
+            "多行长文本也没关系，程序会自动挑出里面的 http(s) 链接。")
+        if not text:
+            return
+        if not re.search(r"https?://", text, re.IGNORECASE):
+            messagebox.showwarning(
+                "未识别到链接",
+                "这段文本里没有找到 http(s) 链接。\n请确认复制的是完整分享文本或视频地址。")
+            return
+        # 压成单行再传参：Windows 命令行参数里带换行容易踩坑，
+        # 而 launcher.py 的 extract_urls 按 \s 切分，空格与换行等价。
+        one_line = re.sub(r"\s+", " ", text).strip()
         self._run_script(
             "抖音下载器",
-            [_py("douyin-venv"), os.path.join(MODULES, "douyin", "launcher.py")],
+            [_py("douyin-venv"), os.path.join(MODULES, "douyin", "launcher.py"), one_line],
             cwd=os.path.join(MODULES, "douyin"),
         )
 
@@ -243,7 +275,8 @@ class Toolbox:
         # GUI 程序：不进日志管道，直接新进程弹出窗口
         try:
             subprocess.Popen([exe, os.path.join(MODULES, "kuaishou", "tools", "快手一键下载器.pyw")],
-                             cwd=os.path.join(MODULES, "kuaishou", "tools"))
+                             cwd=os.path.join(MODULES, "kuaishou", "tools"),
+                             creationflags=NOWINDOW)
             self.say("快手一键下载器窗口已启动（若被安全软件拦截请放行）")
         except Exception as e:
             messagebox.showerror("错误", "启动失败: %s" % e)
@@ -309,6 +342,42 @@ class Toolbox:
         self.root.wait_window(win)
         return result["v"]
 
+    def _ask_text(self, title, label, height=6):
+        """多行文本输入框。关闭窗口/点取消返回 None。
+
+        比 _ask_str 多的就是「多行」：抖音分享口令经常是好几行的，
+        单行 Entry 粘进去会把换行挤掉、内容粘连，导致链接识别失败。
+        这里用 Text，并改用 Ctrl+Enter 提交（避免多行输入时按 Enter 就误提交）。
+        """
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.geometry("680x300")
+        win.transient(self.root)
+        tk.Label(win, text=label, font=("Microsoft YaHei", 10), wraplength=640,
+                 justify="left").pack(pady=(14, 6), padx=14)
+        box = tk.Text(win, font=("Consolas", 10), height=height, wrap="word",
+                      undo=True)
+        box.pack(fill="both", expand=True, padx=14)
+        box.focus_set()
+        result = {"v": None}
+
+        def ok(event=None):
+            result["v"] = box.get("1.0", "end").strip()
+            win.destroy()
+
+        def cancel():
+            win.destroy()
+
+        bf = tk.Frame(win)
+        bf.pack(pady=10)
+        tk.Button(bf, text="确定 (Ctrl+Enter)", width=18, command=ok).pack(side="left", padx=6)
+        tk.Button(bf, text="取消", width=10, command=cancel).pack(side="left", padx=6)
+        box.bind("<Control-Return>", ok)
+        win.bind("<Escape>", lambda _e: cancel())
+        win.grab_set()
+        self.root.wait_window(win)
+        return result["v"]
+
     def cf_download(self):
         urls = self._ask_str("直链下载", "输入下载链接（多个链接用空格分隔）:")
         if not urls:
@@ -359,7 +428,7 @@ class Toolbox:
         # GUI 程序：不进日志管道，直接新进程弹出窗口（同快手一键下载器）
         try:
             subprocess.Popen([exe, os.path.join(self.lr_dir(), "main.py")],
-                             cwd=self.lr_dir())
+                             cwd=self.lr_dir(), creationflags=NOWINDOW)
             self.say("直播录制器窗口已启动（若被安全软件拦截请放行）")
             self.say("提示: 录像保存在 %s" % self.lr_save_dir())
         except Exception as e:
@@ -407,12 +476,9 @@ class Toolbox:
 
         def worker():
             try:
-                creation = 0
-                if os.name == "nt":
-                    creation = subprocess.CREATE_NEW_CONSOLE
                 proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                         text=True, encoding="utf-8", errors="replace",
-                                        creationflags=creation)
+                                        creationflags=NOWINDOW)
                 for line in proc.stdout:
                     self.say(line.rstrip())
                 proc.wait()
@@ -491,17 +557,68 @@ def _tip(widget, text):
     widget.bind("<Leave>", leave)
 
 
+def _fatal(title, msg):
+    """无控制台环境下的最后一道兜底：弹原生对话框，避免进程静默消失。
+
+    以 pythonw.exe 启动时没有控制台，异常信息无处可去，用户只会看到
+    「双击了但什么都没发生」。这里直接调 user32 的 MessageBoxW 弹窗，
+    刻意不依赖 tkinter —— 因为 tkinter 本身很可能就是失败的原因。
+    """
+    text = str(msg)
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, text, title, 0x10)  # 0x10 = MB_ICONERROR
+        return
+    except Exception:
+        pass
+    try:
+        sys.stderr.write("%s\n%s\n" % (title, text))
+    except Exception:
+        pass
+
+
 def main():
-    # 控制台 pythonw 场景下 stdout 可能为 None
+    # 以 pythonw.exe（无控制台）启动时 sys.stdin / stdout / stderr 全部为 None。
+    # 必须在替换 stdout 之前先判断，否则之后分不清「真的没有控制台」还是「已被重定向」。
+    headless = sys.stdin is None and sys.stdout is None
     try:
         if sys.stdout is None:
             sys.stdout = open(os.devnull, "w", encoding="utf-8")
+        if sys.stderr is None:
+            sys.stderr = open(os.devnull, "w", encoding="utf-8")
     except Exception:
         pass
+
+    # 无控制台时任何未捕获异常都会让进程无声退出，统一转成弹窗。
+    def _hook(etype, evalue, etb):
+        import traceback
+        try:
+            detail = "".join(traceback.format_exception(etype, evalue, etb))
+        except Exception:
+            detail = repr(evalue)
+        _fatal("视频下载工具箱 · 运行出错", detail)
+
+    sys.excepthook = _hook
+
     if TK_OK:
-        root = tk.Tk()
+        try:
+            root = tk.Tk()
+        except Exception as e:
+            _fatal("视频下载工具箱 · 无法创建窗口",
+                   "%s\n\n可能是桌面会话或 tkinter 组件异常。\n"
+                   "可改用 启动工具箱.bat 启动以查看完整报错。" % e)
+            return
+        # tkinter 回调里抛出的异常不会走 sys.excepthook，而是走
+        # Tk.report_callback_exception（默认只会打印到 stderr，pythonw 下等于丢弃）。
+        # 不接管这一处，点按钮出错时用户仍然什么都看不到。
+        root.report_callback_exception = _hook
         Toolbox(root)
         root.mainloop()
+    elif headless:
+        # 没有 tkinter 又没有控制台：CLI 兜底菜单连输入都读不了，只能明确报错
+        _fatal("视频下载工具箱 · 缺少 tkinter",
+               "当前 Python 运行时缺少 tkinter 模块，且程序以无控制台方式启动，"
+               "无法回退到命令行菜单。\n\n请改用 启动工具箱.bat 双击启动以查看详细报错。")
     else:
         console_menu()
 

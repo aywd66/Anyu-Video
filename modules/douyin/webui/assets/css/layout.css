@@ -364,33 +364,30 @@
   .side-section:has(#account-card) { display: none; }
 }
 
-/* ---------- 顶栏分级收纳（显式类名，不依赖 :has()） ----------
- * 关键机制：内容总宽不足时优先「去文字留图标」而非 flex 硬压缩
- * （flex 收缩会把按钮内容溢出绘制到相邻区块上，正是截断根因）
- * 1240px：隐账号卡+数据卡；1100px：隐动作区；980px：平台钮只留图标
- * 900px：回移动折叠布局（折行显示全部） */
+/* ---------- 顶栏硬收纳（v7）：放弃渐进收缩，按用户实际视口分层 ----------
+ * 根因复盘：flex 收缩会把按钮内容溢出绘制到相邻区块（截断真因），
+ * 所以本层不再允许任何区块被压缩——空间不足直接隐藏整块。
+ * ≥1500px：全量；1366-1500：隐账号卡；1280-1366：隐动作区+数据卡，平台钮图标化；
+ * 1150-1280：再隐藏菜单文字改滚动；≤900px：回移动折叠布局（全部恢复，折行显示） */
 @media (max-width: 1500px) {
   .side-section--account { display: none; }
 }
 
-@media (max-width: 1240px) {
-  .side-section--account,
-  .side-section--mode { display: none; }
-  /* 平台钮改紧凑描边样式，只留图标（文字完整移除而非被裁） */
-  .platform-btn__label { display: none; }
-  .platform-btn { padding: 0 10px; }
-  .platform-btn .i { margin: 0; }
-}
-
-@media (max-width: 1100px) {
+@media (max-width: 1366px) {
   .side-actions { display: none; }
+  .side-section--mode { display: none; }
 }
 
-@media (max-width: 1240px) {
-  /* 菜单允许收缩滚动（不裁文字，滚看全部） */
+@media (max-width: 1280px) {
+  .platform-btn__label { display: none; }
+  .platform-btn { padding: 0 10px; flex: none; }
   .nav { overflow-x: auto; }
   .nav__item { flex: none; }
 }
+
+/* 平台区永不收缩（内容多大占多大，杜绝溢出绘制） */
+.side-section { flex: none; }
+.side-section--menu { flex: 1 1 auto; min-width: 0; }
 
 @media (max-width: 1180px) {
   :root { --content-max: 100%; }

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""合并项目自检脚本:验证三个模块的路径解析与环境(不依赖网络)"""
+"""合并项目自检脚本:验证四个模块的路径解析与环境(不依赖网络)"""
 import os
 import subprocess
 import sys
@@ -104,6 +104,94 @@ for f in ("toolbox.py", os.path.join("modules", "kuaishou", "tools", "快手一�
     fp = os.path.join(HERE, f)
     r7 = subprocess.run([sys_py, "-m", "py_compile", fp], capture_output=True, text=True)
     check("编译 %s" % os.path.basename(f), r7.returncode == 0, (r7.stderr or "")[-120:])
+
+# 8. 模块 4:直播录制 —— 运行时 / 模块代码 / 配置落位 / 解析层 / 共享浏览器缓存
+lr_dir = os.path.join(HERE, "modules", "live_recorder")
+lr_py = os.path.join(HERE, "runtime", "live-recorder-env", "Scripts", "python.exe")
+check("直播录制运行时存在", os.path.exists(lr_py), lr_py)
+check("直播录制模块入口", os.path.exists(os.path.join(lr_dir, "main.py")),
+      os.path.join(lr_dir, "main.py"))
+
+r8 = subprocess.run([lr_py, "-c",
+                     "import PyQt6, httpx, requests, brotli, playwright; print('lr-deps-ok')"],
+                    capture_output=True, text=True)
+check("直播录制运行时核心依赖", r8.returncode == 0 and "lr-deps-ok" in r8.stdout,
+      (r8.stderr or "lr-deps-ok")[-120:])
+
+# playwright 期望的 chromium 必须已在系统共享缓存里 —— 否则「浏览器兜底取流」
+# 与「扫码登录」两条路径会因缺浏览器内核而失败，而单元层面看不出问题。
+r9 = subprocess.run(
+    [lr_py, "-c",
+     "import os\n"
+     "from playwright.sync_api import sync_playwright\n"
+     "with sync_playwright() as p:\n"
+     "    path = p.chromium.executable_path\n"
+     "    print(path)\n"
+     "    print('EXISTS' if os.path.exists(path) else 'MISSING')\n"],
+    capture_output=True, text=True)
+check("playwright chromium 共享缓存可用",
+      r9.returncode == 0 and "EXISTS" in r9.stdout,
+      (r9.stdout or r9.stderr).strip().replace("\n", " ")[-140:])
+
+# 配置必须落在模块自己的 config.json（而不是项目根或别处），否则用户的
+# 监控清单与登录 Cookie 会在迁移中走失。
+lr_parent = os.path.dirname(lr_dir)
+r10 = subprocess.run(
+    [lr_py, "-c",
+     "import sys; sys.path.insert(0, r'%s')\n"
+     "from live_recorder.config.settings import ConfigStore\n"
+     "s = ConfigStore(); s.load()\n"
+     "print('CFG=' + str(s.path))\n"
+     "print('SAVE=' + str(s.config.save_path))\n"
+     "print('ROOMS=' + str(len(s.rooms)))\n" % lr_parent],
+    capture_output=True, text=True, cwd=lr_dir, encoding="utf-8", errors="replace",
+    env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+if r10.returncode == 0:
+    lines = dict(ln.split("=", 1) for ln in r10.stdout.strip().splitlines() if "=" in ln)
+    check("直播录制配置→模块内 config.json",
+          os.path.normpath(lines.get("CFG", "")) == os.path.normpath(
+              os.path.join(lr_dir, "config.json")),
+          lines.get("CFG", ""))
+    check("直播录制监控清单已保留",
+          lines.get("ROOMS", "0").isdigit() and int(lines["ROOMS"]) > 0,
+          "rooms=%s  save=%s" % (lines.get("ROOMS"), lines.get("SAVE")))
+else:
+    check("直播录制配置解析", False, (r10.stderr or r10.stdout or "")[-200:])
+
+# 离线解析层:两平台的链接识别与快手房间号解析(不联网,不受风控影响)
+r11 = subprocess.run(
+    [lr_py, "-c",
+     "import sys; sys.path.insert(0, r'%s')\n"
+     "from live_recorder.platforms import get_parser\n"
+     "from live_recorder.platforms.registry import detect_platform\n"
+     "print('D=' + detect_platform('https://live.douyin.com/123456789'))\n"
+     "print('K=' + detect_platform('https://v.kuaishou.com/abcDEF'))\n"
+     "print('KR=' + get_parser('kuaishou').resolve_room("
+     "'https://live.kuaishou.com/u/3xf8dh7tqmd9bps'))\n" % lr_parent],
+    capture_output=True, text=True, cwd=lr_dir, encoding="utf-8", errors="replace",
+    env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+if r11.returncode == 0:
+    lines = dict(ln.split("=", 1) for ln in r11.stdout.strip().splitlines() if "=" in ln)
+    check("直播录制平台识别(抖音/快手)",
+          lines.get("D") == "douyin" and lines.get("K") == "kuaishou",
+          "douyin=%s  kuaishou=%s" % (lines.get("D"), lines.get("K")))
+    check("直播录制快手房间号解析", lines.get("KR") == "3xf8dh7tqmd9bps", lines.get("KR", ""))
+else:
+    check("直播录制解析层", False, (r11.stderr or r11.stdout or "")[-200:])
+
+# 9. 模块 4 的启动脚本
+for f in ("启动直播录制器.bat",
+          os.path.join("modules", "live_recorder", "start.bat"),
+          os.path.join("modules", "live_recorder", "login.bat")):
+    check("存在 %s" % f.replace(os.sep, "/"), os.path.exists(os.path.join(HERE, f)), f)
+
+# 10. 统一菜单里必须能查到模块 4 的四个入口
+#     （按钮被误删/改名时这条例得住，避免"功能在但点不到"）
+tb_path = os.path.join(HERE, "toolbox.py")
+tb_src = open(tb_path, encoding="utf-8").read()
+missing = [n for n in ("lr_gui", "lr_login", "lr_selftest", "lr_open_dir") if n not in tb_src]
+check("工具箱菜单含模块 4 全部入口", not missing,
+      ("缺少: %s" % missing) if missing else "lr_gui / lr_login / lr_selftest / lr_open_dir 均在")
 
 print()
 failed = [x for x in results if not x[1]]

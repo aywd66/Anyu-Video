@@ -1,0 +1,33 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+build/
+dist/
+*.spec
+
+# ---- 运行时产物 ----
+# config.json 可能包含平台登录 Cookie（账号凭证），务必不要提交
+config.json
+config.json.tmp
+bin/
+
+# ---- IDE / 编辑器 ----
+.vscode/
+.idea/
+*.swp
+*~
+
+# ---- 录制文件（避免误提交大文件）----
+*.flv
+*.ts
+*.mp4
+*.mkv
+
+# ---- 系统 ----
+Thumbs.db
+Desktop.ini
+.DS_Store

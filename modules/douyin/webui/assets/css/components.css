@@ -49,7 +49,7 @@
 .btn--primary {
   background: var(--bb-primary);
   border-color: var(--bb-primary);
-  color: #fff;
+  color: var(--bb-invert);
   font-weight: 700;
   box-shadow: var(--bb-shadow-primary);
 }
@@ -65,7 +65,7 @@
 .btn--pink {
   background: var(--bb-accent);
   border-color: var(--bb-accent);
-  color: #fff;
+  color: var(--bb-invert);
   font-weight: 700;
   box-shadow: 0 2px 8px rgba(249, 115, 22, .26);
 }
@@ -206,8 +206,8 @@ select.input option {
 }
 
 .card--hero {
-  border: 1px solid #CCFBF1;
-  box-shadow: var(--bb-shadow-card), 0 10px 34px rgba(13, 148, 136, .12);
+  border: 1px solid var(--brand-line);
+  box-shadow: var(--bb-shadow-card), 0 10px 34px rgba(0, 110, 111, .12);
   overflow: hidden;
 }
 
@@ -293,7 +293,7 @@ select.input option {
 .badge--cyan { background: var(--bb-primary-light); color: var(--bb-primary-dark); }
 .badge--pink { background: #F5F3FF; color: #7C3AED; }
 .badge--amber { background: var(--bb-warning-soft); color: var(--bb-warning); }
-.badge--faint { background: #F1F5F9; color: var(--bb-text-secondary); }
+.badge--faint { background: var(--surface-sunken); color: var(--bb-text-secondary); }
 
 .dot {
   width: 8px;
@@ -443,7 +443,7 @@ select.input option {
 /* ---------- 加载骨架 ---------- */
 .skeleton {
   border-radius: var(--r-card);
-  background: linear-gradient(100deg, #F1F5F9 40%, #E8EDF3 50%, #F1F5F9 60%);
+  background: linear-gradient(100deg, var(--surface-sunken) 40%, var(--surface-sunken) 50%, var(--surface-sunken) 60%);
   background-size: 200% 100%;
   animation: shimmer 1.4s linear infinite;
 }
@@ -465,7 +465,7 @@ select.input option {
 .progress {
   height: 6px;
   border-radius: var(--r-pill);
-  background: #EEF2F6;
+  background: var(--surface-sunken);
   border: 1px solid var(--line-soft);
   overflow: hidden;
   flex: 1;
@@ -487,7 +487,7 @@ select.input option {
 .modal-mask {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.4);
+  background: rgba(27, 32, 37, 0.4);
   backdrop-filter: blur(3px);
   display: grid;
   place-items: center;
@@ -503,7 +503,7 @@ select.input option {
   flex-direction: column;
   background: var(--panel);
   border-radius: var(--r-card);
-  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.3);
+  box-shadow: 0 24px 80px rgba(27, 32, 37, 0.3);
   animation: slideUp 0.22s var(--ease);
 }
 
@@ -572,7 +572,7 @@ select.input option {
   color: var(--text);
   font-size: 13px;
   font-weight: 600;
-  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.18);
+  box-shadow: 0 12px 40px rgba(27, 32, 37, 0.18);
   animation: slideUp 0.2s var(--ease);
 }
 
@@ -619,7 +619,7 @@ select.input option {
   height: 22px;
   flex: none;
   border-radius: var(--r-pill);
-  background: #EEF2F6;
+  background: var(--surface-sunken);
   border: 1px solid var(--line);
   cursor: pointer;
   transition: background var(--t-fast), border-color var(--t-fast);
@@ -634,8 +634,8 @@ select.input option {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.2);
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgba(27, 32, 37, 0.2);
   transition: transform var(--t-fast), background var(--t-fast);
 }
 
@@ -646,7 +646,7 @@ select.input option {
 
 .switch[aria-checked="true"]::after {
   transform: translateX(18px);
-  background: #fff;
+  background: var(--surface);
 }
 
 /* 分段选项（模式多选 chips） */
@@ -689,7 +689,7 @@ select.input option {
   place-items: center;
   font-size: 16px;
   font-weight: 800;
-  color: #fff;
+  color: var(--bb-invert);
 }
 
 .avatar--sm { width: 30px; height: 30px; font-size: 12px; }
@@ -740,8 +740,8 @@ select.input option {
   bottom: 7px;
   padding: 1px 7px;
   border-radius: var(--r-pill);
-  background: rgba(15, 23, 42, 0.72);
-  color: #fff;
+  background: rgba(27, 32, 37, 0.72);
+  color: var(--bb-invert);
   font-size: 11px;
   font-weight: 600;
   font-family: var(--font-mono);

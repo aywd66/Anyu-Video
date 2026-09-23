@@ -193,6 +193,23 @@ missing = [n for n in ("lr_gui", "lr_login", "lr_selftest", "lr_open_dir") if n 
 check("工具箱菜单含模块 4 全部入口", not missing,
       ("缺少: %s" % missing) if missing else "lr_gui / lr_login / lr_selftest / lr_open_dir 均在")
 
+# 11. 设计令牌单一来源(Web 工作台 / 桌面启动器共用同一份设计语言)
+#     tokens.css 与 theme_tokens.py 都是 **生成物**,所以必须有一条门禁盯着它们
+#     有没有被手改、或者改了源却忘了重新生成。否则两端会慢慢分叉,
+#     而分叉的症状是"两边看着不太一样"——一个没人会当成 bug 去查的现象。
+tok_src = os.path.join(HERE, "docs", "design-tokens.json")
+gen = os.path.join(HERE, "tools", "gen_tokens.py")
+check("设计令牌源存在", os.path.exists(tok_src), tok_src)
+check("令牌生成器存在", os.path.exists(gen), gen)
+for f in (os.path.join("modules", "douyin", "webui", "assets", "css", "tokens.css"),
+          "theme_tokens.py"):
+    check("令牌产物 %s" % f.replace(os.sep, "/"), os.path.exists(os.path.join(HERE, f)), f)
+if os.path.exists(tok_src) and os.path.exists(gen):
+    r12 = subprocess.run([sys_py, gen, "--check"], capture_output=True, text=True,
+                         cwd=HERE, encoding="utf-8", errors="replace")
+    check("令牌产物未漂移", r12.returncode == 0,
+          (r12.stdout or r12.stderr).strip().replace("\n", " ")[-160:])
+
 print()
 failed = [x for x in results if not x[1]]
 print("== 自检完成: %d 项, 失败 %d ==" % (len(results), len(failed)))

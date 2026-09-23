@@ -188,6 +188,73 @@ def read_config_sanitized():
     return {"available": True, "config": mask(data)}
 
 
+# ---------- 环境体检（顶栏常驻状态灯的数据源） ----------
+def q_env():
+    """本地环境检查：只查本机事实，不发网络请求（快，适合前端轮询）。
+
+    为什么这个接口必须由桥接服务提供：ffmpeg 装没装、磁盘还剩多少，
+    浏览器沙箱外的事前端永远无法知道。V2 设计的「环境状态常驻」
+    要成为真实功能而不是装饰，数据只能来自这里。
+    """
+    import shutil
+
+    def disk_info():
+        # 保存目录可能还不存在（首次运行），此时向上找最近的存在的祖先来取盘符，
+        # 绝不顺手创建目录 —— 体检接口不该有副作用。
+        try:
+            with open(CONFIG_PATH, encoding="utf-8") as f:
+                save = (yaml.safe_load(f) or {}).get("path") or "downloads"
+        except Exception:
+            save = "downloads"
+        p = save if os.path.isabs(save) else os.path.normpath(os.path.join(ROOT, save))
+        probe = p
+        while probe and not os.path.exists(probe):
+            parent = os.path.dirname(probe)
+            probe = None if parent == probe else parent
+        try:
+            du = shutil.disk_usage(probe or ROOT)
+            free_gb = du.free / 1024 ** 3
+            # 阈值口径：5GB 起一个直播间长录就悬了；1GB 以下连合并分片都危险
+            level = "ok" if free_gb >= 5 else ("warn" if free_gb >= 1 else "danger")
+            return {"level": level, "free_gb": round(free_gb, 1),
+                    "total_gb": round(du.total / 1024 ** 3, 1), "path": p,
+                    "exists": os.path.exists(p)}
+        except Exception as e:
+            return {"level": "warn", "free_gb": None, "path": p,
+                    "exists": os.path.exists(p), "error": str(e)}
+
+    # ffmpeg：先查 PATH，回落 imageio-ffmpeg（下载引擎实际用的就是它）
+    ff, ff_src = shutil.which("ffmpeg"), "PATH"
+    if not ff:
+        try:
+            import imageio_ffmpeg
+            ff, ff_src = imageio_ffmpeg.get_ffmpeg_exe(), "imageio-ffmpeg"
+        except Exception:
+            ff, ff_src = None, ""
+
+    # Cookie：auto_cookie 是「自动获取登录态」开关，只报状态不报值（脱敏）
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            auto_cookie = bool((yaml.safe_load(f) or {}).get("auto_cookie"))
+        cookie = {"level": "ok" if auto_cookie else "warn",
+                  "note": "自动获取已开启" if auto_cookie
+                  else "未开启，仅能下载公开内容"}
+    except Exception as e:
+        cookie = {"level": "warn", "note": "读取失败: %s" % e}
+
+    return {
+        "ffmpeg": {"ok": bool(ff), "source": ff_src, "path": ff or ""},
+        "runtime": {"ok": sys.version_info >= (3, 8),
+                    "version": "%d.%d.%d" % sys.version_info[:3]},
+        "cookie": cookie,
+        "disk": disk_info(),
+    }
+
+
+async def h_env(req):
+    return j(q_env())
+
+
 # ---------- 真实下载（调用工程 CLI） ----------
 def build_temp_config(task_id, options):
     """base config.yml + 本次覆盖项 → webui/.tasks/<id>.config.yml"""
@@ -406,6 +473,7 @@ def make_app():
     app.router.add_get("/docs/", lambda req: web.FileResponse(
         os.path.join(HERE, "docs", "assets", "arch-diagram.png")))
     app.router.add_get("/api/bridge/health", h_health)
+    app.router.add_get("/api/bridge/env", h_env)
     app.router.add_get("/api/bridge/authors", h_authors)
     app.router.add_get("/api/bridge/aweme", h_aweme)
     app.router.add_get("/api/bridge/history", h_history)

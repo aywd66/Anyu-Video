@@ -164,14 +164,86 @@
     });
   }
 
+  /* —— 统一输入口（V2 决策 1） ——
+   * 用户不该先判断「这是哪个平台的链接」再决定去哪个模块 ——
+   * 这是机器擅长的事。粘贴任何链接，这里识别平台并分流：
+   *   能在 WebUI 直接下载的（抖音/TikTok/YouTube）→ 带链接跳到对应工作台；
+   *   只有桌面模块才有的（快手/clawfetch 直链）→ 明确告知去哪，不假装能下载。 */
+  const ROUTE_RULES = [
+    { re: /douyin\.com|iesdouyin\.com/i, page: 'douyin', label: '抖音' },
+    { re: /tiktok\.com/i,                page: 'tiktok', label: 'TikTok' },
+    { re: /youtube\.com|youtu\.be/i,     page: 'youtube', label: 'YouTube' },
+  ];
+  const DESKTOP_ONLY = [
+    { re: /kuaishou\.com|chenzhongtech\.com|ksurl\.cn/i,
+      label: '快手', tip: '快手模块在桌面工具箱中运行：请从桌面工具箱主界面进入「快手一键下载器」。' },
+    { re: /^https?:\/\//i,
+      label: '直链', tip: '直链下载（断点续传 / SHA-256 校验）由桌面工具箱的 clawfetch 模块处理。' },
+  ];
+
+  function detectRoute(text) {
+    const urls = U.extractUrls(text);
+    if (!urls.length) return null;
+    const url = urls[0];
+    for (const r of ROUTE_RULES) if (r.re.test(url)) return { page: r.page, label: r.label, url };
+    for (const r of DESKTOP_ONLY) if (r.re.test(url)) return { desktop: true, label: r.label, tip: r.tip, url };
+    return { desktop: true, label: '未知来源', tip: '未识别的平台。若确为直链，请用桌面工具箱的 clawfetch 模块。', url };
+  }
+
+  function bindPaste(view) {
+    const input = view.querySelector('#ph-paste');
+    const hint = view.querySelector('#ph-paste-hint');
+    const go = view.querySelector('#ph-paste-go');
+    if (!input || !hint || !go) return;
+
+    const updateHint = () => {
+      const hit = detectRoute(input.value);
+      if (!hit) {
+        hint.innerHTML = input.value.trim()
+          ? '<span class="dot dot--amber"></span> 未识别到 http(s) 链接，请检查粘贴内容'
+          : '';
+        return hit;
+      }
+      if (hit.desktop) {
+        hint.innerHTML = '<span class="dot dot--amber"></span> 识别为 <b>' + esc(hit.label) +
+          '</b> · ' + esc(hit.tip);
+      } else {
+        hint.innerHTML = '<span class="dot dot--green"></span> 识别为 <b>' + esc(hit.label) +
+          '</b> · 回车或点「识别并分流」继续';
+      }
+      return hit;
+    };
+
+    const submit = () => {
+      const hit = updateHint();
+      if (!hit) { input.focus(); return; }
+      if (hit.desktop) {
+        C.toast(hit.tip, 'warn');
+        return;
+      }
+      // 链接接力：工作台渲染后读取并自动填入
+      window.DYPrefill = { url: hit.url };
+      window.DYRouter.go(hit.page);
+    };
+
+    input.addEventListener('input', U.debounce(updateHint, 120));
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    go.addEventListener('click', submit);
+  }
+
   function render(view) {
     view.className = 'content';
     view.innerHTML =
       '<div class="hero">' +
         '<h1>视频下载工具箱，三合一下载中心</h1>' +
         '<p>抖音高清无水印批量下载、快手作者主页整站归档、任意直链断点续传校验 —— 三个模块共用同一套任务队列、台账与历史记录。</p>' +
+        '<div class="hero-paste">' +
+          '<input class="hero-paste__input" id="ph-paste" type="text" spellcheck="false" autocomplete="off" ' +
+            'placeholder="粘贴链接：抖音 / TikTok / YouTube / 快手 / 直链 —— 自动识别分流" aria-label="粘贴下载链接">' +
+          '<button class="btn btn-hero" id="ph-paste-go">' + I.icon('download', 16) + '识别并分流</button>' +
+        '</div>' +
+        '<div class="hero-paste__hint" id="ph-paste-hint" aria-live="polite"></div>' +
         '<div class="hero-actions">' +
-          '<button class="btn btn-hero" id="ph-quick">' + I.icon('download', 16) + '快速开始：粘贴链接下载</button>' +
           '<button class="btn btn-hero-line" data-go="tasks">查看任务中心</button>' +
         '</div>' +
         '<div class="hero-meta">' +
@@ -232,7 +304,7 @@
     /* —— 交互绑定 —— */
     view.querySelectorAll('[data-go]').forEach((el) =>
       el.addEventListener('click', () => window.DYRouter.go(el.dataset.go)));
-    view.querySelector('#ph-quick').addEventListener('click', () => window.DYRouter.go('douyin'));
+    bindPaste(view);
     view.querySelector('#ph-recheck').addEventListener('click', async () => {
       C.toast('重新检测中…', 'ok');
       await renderHealth();

@@ -1,0 +1,471 @@
+{
+  "_readme": [
+    "视频下载工具箱 · 设计令牌单一来源（Single Source of Truth）",
+    "Web 端 tokens.css 与桌面端 theme_tokens.py 都由本文件生成，禁止手改产物。",
+    "改令牌 → 跑 tools/gen_tokens.py --write → 两端同步生效。",
+    "tools/gen_tokens.py --check 会校验产物与本文件是否漂移（已接入自检）。",
+    "颜色同时记 oklch（编辑用，感知均匀）与 hex（交付用，浏览器/ttk 都要它）。"
+  ],
+  "meta": {
+    "name": "视频下载工具箱 V2",
+    "born": "2026-09-23",
+    "design_doc": "视频下载工具箱-UI设计V2/设计系统.md",
+    "brand_hue": 195,
+    "note": "品牌色选 hue 195（青），刻意避开方案C 的 178 与 174，防止「新方案看着还是老方案」"
+  },
+  "color": {
+    "paper": {
+      "oklch": [
+        0.982,
+        0.0041,
+        91.4
+      ],
+      "hex": "#FAF9F6",
+      "roundtrip": "#FAF9F6",
+      "ok": true
+    },
+    "paper-2": {
+      "oklch": [
+        0.9665,
+        0.0067,
+        97.4
+      ],
+      "hex": "#F5F4EF",
+      "roundtrip": "#F5F4EF",
+      "ok": true
+    },
+    "surface": {
+      "oklch": [
+        0.9938,
+        0.0013,
+        106.4
+      ],
+      "hex": "#FDFDFC",
+      "roundtrip": "#FDFDFC",
+      "ok": true
+    },
+    "surface-sunken": {
+      "oklch": [
+        0.9578,
+        0.0054,
+        95.1
+      ],
+      "hex": "#F2F1ED",
+      "roundtrip": "#F2F1ED",
+      "ok": true
+    },
+    "line": {
+      "oklch": [
+        0.9,
+        0.0068,
+        97.4
+      ],
+      "hex": "#DFDED9",
+      "roundtrip": "#DFDED9",
+      "ok": true
+    },
+    "line-strong": {
+      "oklch": [
+        0.6551,
+        0.0086,
+        91.5
+      ],
+      "hex": "#92918B",
+      "roundtrip": "#92918B",
+      "ok": true
+    },
+    "ink": {
+      "oklch": [
+        0.2406,
+        0.0121,
+        248.3
+      ],
+      "hex": "#1B2025",
+      "roundtrip": "#1B2025",
+      "ok": true
+    },
+    "ink-2": {
+      "oklch": [
+        0.4399,
+        0.0118,
+        252.9
+      ],
+      "hex": "#4E5359",
+      "roundtrip": "#4E5359",
+      "ok": true
+    },
+    "ink-3": {
+      "oklch": [
+        0.5381,
+        0.0091,
+        253.9
+      ],
+      "hex": "#6B6E73",
+      "roundtrip": "#6B6E73",
+      "ok": true
+    },
+    "brand": {
+      "oklch": [
+        0.4877,
+        0.0831,
+        195.9
+      ],
+      "hex": "#006E6F",
+      "roundtrip": "#006E6F",
+      "ok": true
+    },
+    "brand-hover": {
+      "oklch": [
+        0.4367,
+        0.0744,
+        196.0
+      ],
+      "hex": "#005E5F",
+      "roundtrip": "#005E5F",
+      "ok": true
+    },
+    "brand-ink": {
+      "oklch": [
+        0.3539,
+        0.0603,
+        196.4
+      ],
+      "hex": "#004546",
+      "roundtrip": "#004546",
+      "ok": true
+    },
+    "brand-soft": {
+      "oklch": [
+        0.9453,
+        0.0402,
+        194.6
+      ],
+      "hex": "#CFF6F5",
+      "roundtrip": "#CFF6F5",
+      "ok": true
+    },
+    "brand-line": {
+      "oklch": [
+        0.8395,
+        0.0546,
+        196.2
+      ],
+      "hex": "#A1D6D6",
+      "roundtrip": "#A1D6D6",
+      "ok": true
+    },
+    "ok": {
+      "oklch": [
+        0.5002,
+        0.1152,
+        150.0
+      ],
+      "hex": "#26753E",
+      "roundtrip": "#26753E",
+      "ok": true
+    },
+    "ok-soft": {
+      "oklch": [
+        0.9396,
+        0.0441,
+        150.3
+      ],
+      "hex": "#D7F4DC",
+      "roundtrip": "#D7F4DC",
+      "ok": true
+    },
+    "warn": {
+      "oklch": [
+        0.5356,
+        0.1234,
+        63.0
+      ],
+      "hex": "#9E5A00",
+      "roundtrip": "#9E5A00",
+      "ok": true
+    },
+    "warn-soft": {
+      "oklch": [
+        0.9434,
+        0.0494,
+        78.0
+      ],
+      "hex": "#FFE9C8",
+      "roundtrip": "#FFE9C8",
+      "ok": true
+    },
+    "danger": {
+      "oklch": [
+        0.5211,
+        0.1652,
+        26.1
+      ],
+      "hex": "#B53532",
+      "roundtrip": "#B53532",
+      "ok": true
+    },
+    "danger-soft": {
+      "oklch": [
+        0.946,
+        0.0273,
+        31.7
+      ],
+      "hex": "#FFE7E2",
+      "roundtrip": "#FFE7E2",
+      "ok": true
+    },
+    "info": {
+      "oklch": [
+        0.5197,
+        0.1085,
+        255.4
+      ],
+      "hex": "#3B6AA6",
+      "roundtrip": "#3B6AA6",
+      "ok": true
+    },
+    "info-soft": {
+      "oklch": [
+        0.9429,
+        0.0296,
+        243.4
+      ],
+      "hex": "#DCEFFF",
+      "roundtrip": "#DCEFFF",
+      "ok": true
+    },
+    "line-mid": {
+      "oklch": [
+        0.8296,
+        0.0086,
+        91.5
+      ],
+      "hex": "#C9C7C1",
+      "roundtrip": "#C9C7C1",
+      "ok": true
+    }
+  },
+  "contrast": [
+    {
+      "fg": "ink",
+      "bg": "paper",
+      "ratio": 15.58,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "ink",
+      "bg": "paper-2",
+      "ratio": 14.9,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "ink",
+      "bg": "surface",
+      "ratio": 16.12,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "ink",
+      "bg": "surface-sunken",
+      "ratio": 14.52,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "ink-2",
+      "bg": "paper",
+      "ratio": 7.37,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "ink-2",
+      "bg": "paper-2",
+      "ratio": 7.05,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "ink-2",
+      "bg": "surface",
+      "ratio": 7.63,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "ink-2",
+      "bg": "surface-sunken",
+      "ratio": 6.87,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "ink-3",
+      "bg": "paper",
+      "ratio": 4.86,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "ink-3",
+      "bg": "paper-2",
+      "ratio": 4.65,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "ink-3",
+      "bg": "surface",
+      "ratio": 5.03,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "ink-3",
+      "bg": "surface-sunken",
+      "ratio": 4.53,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "ok",
+      "bg": "ok-soft",
+      "ratio": 4.83,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "warn",
+      "bg": "warn-soft",
+      "ratio": 4.53,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "danger",
+      "bg": "danger-soft",
+      "ratio": 5.05,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "info",
+      "bg": "info-soft",
+      "ratio": 4.7,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "brand-ink",
+      "bg": "brand-soft",
+      "ratio": 9.36,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "brand",
+      "bg": "paper",
+      "ratio": 5.76,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "brand",
+      "bg": "paper-2",
+      "ratio": 5.51,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "brand",
+      "bg": "surface",
+      "ratio": 5.96,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "brand",
+      "bg": "surface-sunken",
+      "ratio": 5.37,
+      "need": 4.5,
+      "pass": true
+    },
+    {
+      "fg": "line-strong",
+      "bg": "paper",
+      "ratio": 3.0,
+      "need": 3.0,
+      "pass": true
+    },
+    {
+      "fg": "line-strong",
+      "bg": "surface",
+      "ratio": 3.1,
+      "need": 3.0,
+      "pass": true
+    }
+  ],
+  "corrections": [
+    {
+      "key": "ink-3",
+      "from": "#71757A",
+      "to": "#6B6E73",
+      "oklch_l": 0.5381,
+      "why": "辅助文字：须同时压在所有四种底上"
+    },
+    {
+      "key": "warn",
+      "from": "#A05C00",
+      "to": "#9E5A00",
+      "oklch_l": 0.5356,
+      "why": "警示文字：须在 warn-soft 浅底上达标"
+    },
+    {
+      "key": "line-strong",
+      "from": "#C9C7C1",
+      "to": "#92918B",
+      "oklch_l": 0.6551,
+      "why": "交互控件轮廓：WCAG 1.4.11 非文本对比 3:1"
+    }
+  ],
+  "font": {
+    "ui": "\"PingFang SC\",\"Microsoft YaHei UI\",\"Microsoft YaHei\",\"Source Han Sans SC\",\"Noto Sans SC\",system-ui,-apple-system,\"Segoe UI\",sans-serif",
+    "read": "ui-monospace,\"Cascadia Mono\",\"Cascadia Code\",Consolas,\"SF Mono\",\"JetBrains Mono\",monospace"
+  },
+  "space": {
+    "1": "4px",
+    "2": "8px",
+    "3": "12px",
+    "4": "16px",
+    "5": "24px",
+    "6": "32px",
+    "7": "48px",
+    "8": "64px"
+  },
+  "radius": {
+    "card": "12px",
+    "input": "8px",
+    "small": "6px",
+    "pill": "999px"
+  },
+  "shadow": {
+    "1": "0 1px 2px rgba(27,32,37,.06)",
+    "2": "0 2px 8px -2px rgba(27,32,37,.10)",
+    "3": "0 12px 32px -12px rgba(27,32,37,.18)"
+  },
+  "motion": {
+    "ease": "cubic-bezier(.22,1,.36,1)",
+    "ease_out": "cubic-bezier(.16,1,.3,1)",
+    "dur_fast": "120ms",
+    "dur": "200ms",
+    "dur_slow": "320ms"
+  },
+  "z": {
+    "sticky": "10",
+    "pop": "40",
+    "toast": "60"
+  }
+}

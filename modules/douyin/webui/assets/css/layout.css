@@ -43,8 +43,8 @@
   border: none;
   display: grid;
   place-items: center;
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(13, 148, 136, .28);
+  color: var(--bb-invert);
+  box-shadow: 0 2px 8px rgba(0, 110, 111, .28);
 }
 
 .brand__word {
@@ -270,7 +270,7 @@
   padding: 0 6px;
   border-radius: var(--r-pill);
   background: var(--bb-accent);
-  color: #fff;
+  color: var(--bb-invert);
   font-size: 11px;
   font-weight: 700;
   display: inline-flex;
@@ -290,6 +290,68 @@
 }
 
 .side-actions .btn { justify-content: center; }
+
+/* ---------- 环境状态灯（V2 决策 3：环境状态常驻） ----------
+ * 状态三重编码：圆点颜色 + aria-label + 弹层详情，绝不只靠颜色传信息
+ * （约 8% 男性有不同程度的色觉障碍）。 */
+.side-section--env { margin-left: 8px; }
+
+.env-lights {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex: none;
+}
+
+.env-light {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
+  background: transparent;
+  font: inherit;
+  font-size: var(--fs-label);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background-color var(--t-fast);
+}
+
+.env-light:hover { background: var(--paper-2); }
+.env-light:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+
+.env-light__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  /* ⚠️ span 默认 display:inline，width/height 一律不生效 —— 必须显式块化 */
+  display: inline-block;
+}
+
+.env-light[data-level="ok"] .env-light__dot { background: var(--ok); }
+.env-light[data-level="warn"] .env-light__dot { background: var(--warn); }
+.env-light[data-level="danger"] .env-light__dot { background: var(--danger); }
+.env-light[data-level="unknown"] .env-light__dot { background: var(--ink-3); }
+
+/* 注意/异常的灯要有稳定提示，不只靠颜色 */
+.env-light[data-level="warn"],
+.env-light[data-level="danger"] { color: var(--ink-2); border-color: var(--line); background: var(--paper-2); }
+
+/* 弹层里的键值行 */
+.env-detail .kv {
+  display: flex;
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: var(--fs-small);
+}
+.env-detail .kv:last-child { border-bottom: none; }
+.env-detail .kv__k { color: var(--muted); flex: none; width: 76px; }
+.env-detail .kv__v { color: var(--ink-2); word-break: break-all; }
+.env-detail__none { color: var(--muted); font-size: var(--fs-small); line-height: 1.7; }
 
 /* 底部版本条 → 顶栏空间有限，隐藏（版本信息见 README） */
 .side-footer { display: none; }
@@ -376,6 +438,8 @@
 @media (max-width: 1366px) {
   .side-actions { display: none; }
   .side-section--mode { display: none; }
+  .env-light__label { display: none; }  /* 窄屏只留灯，详情点开看 */
+  .env-light { padding: 0 7px; }
 }
 
 @media (max-width: 1280px) {

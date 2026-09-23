@@ -80,7 +80,7 @@ button {
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #CBD5E1;
+  background: var(--line-mid);
   border-radius: 5px;
   border: 2px solid var(--bb-bg);
 }

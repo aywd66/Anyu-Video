@@ -114,6 +114,15 @@
     view.querySelectorAll('[data-go]').forEach((b) =>
       b.addEventListener('click', () => window.DYRouter.go(b.dataset.go)));
 
+    // 统一输入口的接力：工作台首页粘贴的链接带过来，自动填入并触发识别。
+    // 用完即删，避免用户下次手动进工作台时被上次的链接吓一跳。
+    if (window.DYPrefill && window.DYPrefill.url) {
+      input.value = window.DYPrefill.url;
+      delete window.DYPrefill;
+      updateStatus();
+      input.focus();
+    }
+
     goBtn.addEventListener('click', async () => {
       const urls = updateStatus();
       if (!urls.length) {

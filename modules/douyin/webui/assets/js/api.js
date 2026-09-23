@@ -54,6 +54,18 @@
       return r.json();
     },
 
+    /**
+     * 环境体检：ffmpeg / 运行时 / Cookie / 磁盘。
+     * mock 模式（双击打开 index.html）拿不到本机事实，
+     * 返回 null，顶栏状态灯会如实显示「未知」而不是假装正常。
+     */
+    async env() {
+      if (!this.isBridge()) return null;
+      const r = await fetch('/api/bridge/env', { cache: 'no-store' });
+      if (!r.ok) throw new Error('环境体检异常 ' + r.status);
+      return r.json();
+    },
+
     /** 真实作者库（按作品数排序） */
     async bridgeAuthors() {
       const r = await fetch('/api/bridge/authors', { cache: 'no-store' });

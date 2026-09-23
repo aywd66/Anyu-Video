@@ -27,6 +27,21 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MODULES = os.path.join(HERE, "modules")
 RUNTIME = os.path.join(HERE, "runtime")
 
+# 设计令牌：与 Web 工作台的 tokens.css 出自同一份 docs/design-tokens.json。
+# theme_tokens.py 是生成物 —— 改主题 = 改令牌源 + 跑 tools/gen_tokens.py --write，
+# 两端一起变。之前这里是一份手抄的色值，注释写着「与 WebUI 同源」，
+# 但没有任何机制保证它们真的一致，两份手抄迟早分叉且无人发现。
+try:
+    import theme_tokens as _tokens
+except Exception:
+    # 生成物被误删时不让整个启动器打不开（pythonw 下连报错都看不见），
+    # 回退到「最近一次生成的值」—— 与 docs/design-tokens.json 保持同步。
+    _tokens = None
+
+
+def _tok(name, fallback):
+    return getattr(_tokens, name, fallback) if _tokens else fallback
+
 
 def _py(name):
     return os.path.join(RUNTIME, name, "Scripts", "python.exe")
@@ -52,16 +67,21 @@ def _open(path):
 
 
 class Toolbox:
-    # 「明亮商务风」主题（与 WebUI tokens.css 同源）
-    C_BG = "#FAF9F6"        # 暖白底
-    C_CARD = "#FFFFFF"      # 卡片白
-    C_PRIMARY = "#0D9488"   # 青碧主色
-    C_PRIMARY_DARK = "#0F766E"
-    C_PRIMARY_LIGHT = "#F0FDFA"
-    C_TEXT = "#334155"
-    C_HEADING = "#1E293B"
-    C_MUTED = "#64748B"
-    C_BORDER = "#E2E8F0"
+    # 「明亮清爽」主题（V2）—— 全部取自令牌单一来源，见 toolbox.py 顶部的 _tok()。
+    C_BG = _tok("BG", "#FAF9F6")             # 暖白底（微暖 hue 95，纸感）
+    C_CARD = _tok("CARD", "#FDFDFC")         # 卡片
+    C_SUNKEN = _tok("SUNKEN", "#F2F1ED")     # 凹陷区（日志窗格）
+    C_PRIMARY = _tok("PRIMARY", "#006E6F")   # 品牌青（hue 195）
+    C_PRIMARY_DARK = _tok("PRIMARY_DARK", "#004546")   # 浅底上的品牌色文字
+    C_PRIMARY_LIGHT = _tok("PRIMARY_SOFT", "#CFF6F5")  # 品牌浅底（选中/悬停）
+    C_TEXT = _tok("TEXT", "#4E5359")
+    C_HEADING = _tok("HEADING", "#1B2025")
+    C_MUTED = _tok("MUTED", "#6B6E73")
+    C_BORDER = _tok("LINE_MID", "#C9C7C1")   # 按钮描边（装饰性；控件轮廓用 LINE_STRONG）
+    C_BORDER_STRONG = _tok("LINE_STRONG", "#92918B")
+    C_OK = _tok("OK", "#26753E")
+    C_WARN = _tok("WARN", "#9E5A00")
+    C_DANGER = _tok("DANGER", "#B53532")
 
     def __init__(self, root):
         self.root = root

@@ -27,6 +27,7 @@
       // 探测运行环境：由 bridge_server.py 托管时自动接入工程真实数据
       try { await window.DYApi.detectMode(); } catch (e) { console.warn('模式探测失败', e); }
       this.updateModeCard();
+      this.initEnvLights();
       window.DYRouter.start();
       this.updateTaskBadge();
       this.updateAccountCard();
@@ -56,6 +57,79 @@
       root.innerHTML =
         '<aside class="sidebar" id="sidebar" aria-label="主导航"></aside>' +
         '<main class="main" id="main"><div class="content" id="page-view"></div></main>';
+    },
+
+    /* ---------- 顶栏环境状态灯 ----------
+     * V2 决策 3：「环境状态常驻」——把「点了才报错」提前成「事先可见」。
+     * 状态三重编码（图标/颜色 + 文字 + 弹层详情），不只靠颜色传信息。
+     * 数据来自 /api/bridge/env（本机事实：ffmpeg / 运行时 / Cookie / 磁盘），
+     * 演示模式下拿不到真值，如实显示「未知」而不是假装正常。 */
+    async initEnvLights() {
+      await this.refreshEnvLights();
+      // 60s 一轮足够了：磁盘写满、ffmpeg 被卸载都不是秒级事件
+      if (this._envTimer) clearInterval(this._envTimer);
+      this._envTimer = setInterval(() => this.refreshEnvLights(), 60000);
+    },
+
+    async refreshEnvLights() {
+      let env = null;
+      try { env = await window.DYApi.env(); } catch (e) { /* 服务不在线 */ }
+      this.envData = env;
+      this.renderEnvLights(env || {});
+    },
+
+    renderEnvLights(env) {
+      const box = document.getElementById('env-lights');
+      if (!box) return;
+      const items = [
+        { k: 'ffmpeg',  label: 'ffmpeg' },
+        { k: 'runtime', label: '运行时' },
+        { k: 'cookie',  label: 'Cookie' },
+        { k: 'disk',    label: '磁盘' },
+      ];
+      box.innerHTML = items.map((it) => {
+        const d = env && env[it.k] ? env[it.k] : null;
+        const level = d ? (d.level || (d.ok === false ? 'warn' : 'ok')) : 'unknown';
+        const state = { ok: '正常', warn: '注意', danger: '异常', unknown: '未知' }[level];
+        return '<button class="env-light" data-k="' + it.k + '" data-level="' + level + '" ' +
+          'aria-label="' + it.label + ' ' + state + '">' +
+          '<span class="env-light__dot" aria-hidden="true"></span>' +
+          '<span class="env-light__label">' + it.label + '</span>' +
+          '<span class="sr-only">' + state + '</span></button>';
+      }).join('');
+      box.hidden = false;
+      box.querySelectorAll('.env-light').forEach((b) => {
+        b.addEventListener('click', () => this.showEnvDetail(b.dataset.k));
+      });
+    },
+
+    showEnvDetail(key) {
+      const env = this.envData || {};
+      const names = { ffmpeg: 'ffmpeg', runtime: '运行时', cookie: 'Cookie', disk: '磁盘' };
+      const d = env[key];
+      let rows = '';
+      const row = (k, v) =>
+        '<div class="kv"><span class="kv__k">' + esc(k) + '</span>' +
+        '<span class="kv__v num">' + esc(String(v)) + '</span></div>';
+      if (!d) {
+        rows = '<p class="env-detail__none">当前是演示模式（未由桥接服务托管），' +
+          '本机环境无法探测。用 ops/deploy-douzy-webui.ps1 启动后即可看到真实状态。</p>';
+      } else if (key === 'ffmpeg') {
+        rows = row('状态', d.ok ? '可用' : '未找到') +
+          row('来源', d.source || '-') + row('路径', d.path || '-');
+      } else if (key === 'runtime') {
+        rows = row('状态', d.ok ? '可用' : '版本过旧') + row('Python', d.version || '-');
+      } else if (key === 'cookie') {
+        rows = row('状态', d.level === 'ok' ? '就绪' : '需注意') + row('说明', d.note || '-');
+      } else if (key === 'disk') {
+        rows = row('状态', d.level === 'ok' ? '充足' : d.level === 'warn' ? '偏低' : '不足') +
+          (d.free_gb != null ? row('剩余', d.free_gb + ' GB / ' + d.total_gb + ' GB') : row('错误', d.error || '-')) +
+          row('保存目录', d.path || '-') +
+          (d.exists ? '' : row('提示', '目录尚不存在，首次下载时自动创建'));
+      }
+      C.open(C.modalFrame('环境 · ' + names[key],
+        '<div class="env-detail">' + rows + '</div>',
+        '<button class="btn" data-modal-close>关闭</button>'));
     },
 
     /* ---------- 侧边栏 ---------- */
@@ -103,6 +177,9 @@
             '<button class="btn btn--ghost btn--sm" id="btn-settings-nav">' + I.icon('settings', 15) + '设置</button>' +
             '<button class="btn btn--ghost btn--sm" id="btn-netdiag">' + I.icon('activity', 15) + '网络诊断</button>' +
           '</div>' +
+        '</div>' +
+        '<div class="side-section side-section--env">' +
+          '<div class="env-lights" id="env-lights" hidden></div>' +
         '</div>' +
         '<div class="side-section side-section--mode">' +
           '<div class="side-card">' +

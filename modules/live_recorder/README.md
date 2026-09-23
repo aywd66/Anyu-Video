@@ -16,7 +16,8 @@
 > 在工具箱内的差异只有三处：
 > ① 解释器改用工具箱的 `runtime\live-recorder-env`（本目录的 `start.bat` / `login.bat` / `selftest.bat`
 > 会按「工具箱 runtime → 本目录 `.venv` → PATH」顺序自动查找，无需改动用法）；
-> ② 录像仍保存在 `C:\Users\Mechrevo\LiveRecorder`（可在「设置 → 录制」里改）；
+> ② 录像保存在工具箱内的 `downloads\live_recorder\`（可在「设置 → 录制」里改；该目录由配置项
+> `save_path` 决定，已从旧的 `C:\Users\Mechrevo\LiveRecorder` 整体迁入）；
 > ③ 免安装依赖已随工具箱交付，**不需要再执行 `setup.bat` 与 `pip install`**。
 >
 > 本文档保留原项目的完整说明（含独立部署方式），与工具箱内的实际使用完全兼容。
@@ -426,7 +427,7 @@ python main.py
 | `poll_interval`             | `60`             | 轮询间隔（秒），10 ~ 300             |
 | `check_concurrency`         | `6`              | 并发检测线程数，过高易触发风控              |
 | `max_monitor_rooms`         | `100`            | 监控对象上限（≥ 50）                 |
-| `save_path`                 | `~/LiveRecorder` | 录制文件保存根目录                    |
+| `save_path`                 | `~/LiveRecorder` | 录制文件保存根目录。**工具箱内已设为 `downloads\live_recorder`** |
 | `quality_preference`        | `origin`         | 画质偏好：`origin` 原画 / `high` 超清 |
 | `enable_fallback`           | `true`           | 原画失败时是否自动降级                  |
 | `max_file_size_gb`          | `4.0`            | 单分片大小上限（GB），达到后分卷            |

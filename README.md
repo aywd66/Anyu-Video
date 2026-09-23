@@ -19,8 +19,9 @@
 
 四个模块也可用项目根的 `启动抖音下载器.bat` / `启动快手一键下载器.bat` / `启动程序下载.bat` / `启动直播录制器.bat` 单独启动。
 
-> 直播录制的录像文件默认保存到 `C:\Users\Mechrevo\LiveRecorder`（按 `平台\昵称\日期` 三级分类），
-> 可在「直播录制器 → 设置 → 录制」里改成任意目录；菜单里的「打开录像目录」按钮会跟着这个设置走。
+> 直播录制的录像文件保存在 `downloads\live_recorder\`（按 `平台\昵称\日期` 三级分类），
+> 与其它三个模块的产物位置统一；可在「直播录制器 → 设置 → 录制」里改成任意目录，
+> 菜单里的「打开录像目录」按钮会跟着这个设置走（实时读配置，不写死）。
 
 ## 文档导航（docs\）
 
@@ -56,6 +57,9 @@ tests\selftest.py     ← 环境自检（python tests\selftest.py）
 | modules\live_recorder | LiveRecorder v1.0.3 快手/抖音直播流自动录制工具 | 工作区 `live_recorder` |
 
 原项目均未改动；完整备份在 `C:\Users\Mechrevo\.openclaw-backup\` 下（`merge-2026-09-21\` 为前三模块，`merge-2026-09-23\` 为模块 4 并入前的快照）。
+
+> 工作区那份 `live_recorder\` 已收敛为**只读代码快照**（约 700 KB）：它的 346 MB 旧 `.venv`
+> 已删除、`config.json` 已改名 `.bak`。**正式入口只有工具箱这一份**，详见 [整合方案](docs/整合方案.md)。
 
 ## 合规提示
 

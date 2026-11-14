@@ -85,18 +85,43 @@ printf "%s" "<access_token>" | "$GH" auth login --with-token
 ```bash
 GH="$HOME/.workbuddy/bin-gh/bin/gh.exe"
 cd /e/lp/lp/douzy
-"$GH" repo create douzy --private --source=. --remote=origin --push
-# 等价于：创建私有仓库 aywd66/douzy → 添加 remote origin → 推送 master
-git remote -v                 # 验证
-"$GH" repo view aywd66/douzy  # 验证仓库可见
+"$GH" repo create Anyu-Video --public --source=. --remote=origin --push
+# 仓库创建成功：https://github.com/aywd66/Anyu-Video
 ```
+
+### 5.1 推送网络问题与解决方案（重要经验）
+
+本机代理对 `github.com` 的 **git push（POST）隧道极不稳定**，表现为三种随机错误：
+`CONNECT tunnel failed, response 502` / `schannel: server closed abruptly (missing close_notify)` / `Empty reply from server`。GET 请求（ls-remote、curl）正常，API（api.github.com）正常，唯独 push 的大 POST 时通时断。
+
+**镜像直推不可行**：`gh-proxy.com` 不支持认证透传（No anonymous write access）。
+
+**最终方案 = 增量推送 + ghproxy.net 镜像（支持认证透传）**：
+
+```bash
+GH="$HOME/.workbuddy/bin-gh/bin/gh.exe"
+TOKEN=$("$GH" auth token)
+MIRROR="https://oauth2:${TOKEN}@ghproxy.net/https://github.com/aywd66/Anyu-Video.git"
+
+# 按提交逐个推（每个提交一个小 POST，失败重试，成功率高）
+for sha in $(git rev-list --reverse master); do
+  for try in $(seq 1 10); do
+    git -c http.version=HTTP/1.1 push "$MIRROR" ${sha}:refs/heads/master && break
+    sleep 3
+  done
+done
+```
+
+> 辅助措施：`git config http.version HTTP/1.1`；直连 origin 偶尔也能通，
+> 可先试 `git push origin <sha>:refs/heads/master`，不通再走镜像。
+> 后续日常推送若再遇到同样问题，套用同样的镜像 URL 即可。
 
 ## 六、上传后验证清单
 
-- [ ] `git ls-files | wc -l` 确认入库文件数合理（应 ≈ 440，不含 runtime/data/downloads/.data）
-- [ ] GitHub 网页上搜索 `passToken`、`web_st=`、`cookies`：确认无真实凭证
-- [ ] `git status` 干净（除忽略文件外无遗漏）
-- [ ] 仓库可见性、README 渲染正常
+- [x] 远程 `master` = 本地 HEAD（abad2e8），共 23 个提交
+- [x] 入库文件 349 个，远程顶层目录仅：modules / docs / ops / tests / tools / README / .gitignore / toolbox.py / theme_tokens.py / 启动工具箱.bat（无 runtime/data/downloads/.data）
+- [x] 跟踪文件中含 cookie 字样的均为代码/指南文档，无真实凭证（含长凭证值的正则扫描无命中）
+- [x] 历史全部 blob 无真实 Cookie 值、无真实 API 密钥
 
 ## 七、后续日常更新流程
 

@@ -7,6 +7,12 @@
   box-sizing: border-box;
 }
 
+/* hidden 属性必须永远生效：任何作者样式的 display 都会盖过 UA 的
+   [hidden] { display:none }，这里统一兜底（设置页 sto-dirty/sto-bar 踩过） */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;

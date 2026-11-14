@@ -24,7 +24,7 @@
       '<p class="small muted mb-4">一次粘贴多条链接（每行一条，或直接粘贴整段分享文本），' +
       '解析去重后按顺序加入下载队列。</p>' +
 
-      '<section class="card mb-4">' +
+      '<section class="section section--flush">' +
         '<textarea class="input" id="qu-input" rows="7" spellcheck="false" ' +
         'placeholder="https://www.douyin.com/video/…&#10;https://v.douyin.com/…&#10;https://www.douyin.com/user/…&#10;（每行一条，支持混合平台）" ' +
         'aria-label="批量链接输入"></textarea>' +

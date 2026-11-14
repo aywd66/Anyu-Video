@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -60,6 +61,20 @@ class Database:
         # 避免在 __init__ 阶段抢到错误的 loop。
         self._conn_lock: Optional[asyncio.Lock] = None
 
+    def _ensure_parent_dir(self) -> None:
+        """确保 db_path 的父目录存在。
+
+        sqlite 只能建库文件，**不会**建目录：父目录缺失时它抛的是
+        `unable to open database file`，信息量几乎为零，看起来像权限问题。
+        `database_path` 在 config.yml 里是相对路径（`../../data/douyin/...`，
+        为了整个目录拷走即可用），一旦 data/douyin 被清掉，下载就在
+        initialize() 阶段当场死掉，且日志里只有那一句 sqlite 的报错。
+        所以这里自己兜住，缺目录就补上。
+        """
+        parent = os.path.dirname(os.path.abspath(self.db_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+
     async def _get_conn(self) -> aiosqlite.Connection:
         if self._conn is not None:
             return self._conn
@@ -67,6 +82,7 @@ class Database:
             self._conn_lock = asyncio.Lock()
         async with self._conn_lock:
             if self._conn is None:
+                self._ensure_parent_dir()
                 self._conn = await aiosqlite.connect(self.db_path)
         return self._conn
 
@@ -81,6 +97,14 @@ class Database:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA synchronous=NORMAL")
 
+        # `origin` —— 这条作品是**从哪种链接**下下来的（url_type：user / video /
+        # gallery / collection / music / live_replay …）。空串 = 早于该字段的
+        # 历史数据，来源未知。
+        #
+        # 为什么必须存下来：「关注」列表是**派生**出来的（库里有独立的关注表会
+        # 和 CLI/手机端各自写库打架），派生规则是「作者名下有没有主页来源的作品」。
+        # 没有这一列，就只能靠「作品数 > 1」这类猜法，而「只下过一个作品」的
+        # 作者既可能是主页批量、也可能是一次单链接 —— 猜必错，且错了没人发现。
         await db.execute("""
             CREATE TABLE IF NOT EXISTS aweme (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,7 +116,8 @@ class Database:
                 create_time INTEGER,
                 download_time INTEGER,
                 file_path TEXT,
-                metadata TEXT
+                metadata TEXT,
+                origin TEXT NOT NULL DEFAULT ''
             )
         """)
 
@@ -172,6 +197,17 @@ class Database:
         if "author_sec_uid" not in existing_columns:
             await db.execute("ALTER TABLE aweme ADD COLUMN author_sec_uid TEXT")
 
+        # 「关注管理」作者列表的覆盖索引：q_authors 按 author_name 分组并
+        # 聚合 author_id / author_sec_uid / create_time。没有它这条查询就是
+        # 全表扫描 + 两个临时 B-TREE（aweme 每行内联着 ~50KB 的 metadata JSON，
+        # 实测 10823 行 / 589MB 时一次要 300ms+，且随库增长线性变慢）。
+        # ⚠️ 必须在 author_sec_uid 迁移**之后**建：它引用了该列，而旧库/新库
+        # 都可能在跑到这里之前还没有这一列。
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_author_agg "
+            "ON aweme(author_name, author_id, author_sec_uid, create_time)"
+        )
+
         # Incremental migration: add retry_history column to legacy job
         # tables so pre-existing DB files (created before retry-history
         # persistence landed) continue to work. NULL for old rows; the
@@ -224,6 +260,15 @@ class Database:
                 "ALTER TABLE aweme ADD COLUMN job_id TEXT NOT NULL DEFAULT ''"
             )
 
+        # Incremental migration: 作品来源（见建表处 origin 的说明）。
+        # 旧库里已有的行一律留在 ''（来源未知）—— 派生关注列表时未知按「关注」
+        # 处理，等价于升级前的行为，不会因为这次改动把老作者从关注列表里踢掉。
+        # SQLite 的 ADD COLUMN 带常量默认值是纯元数据操作，1GB 的库也是毫秒级。
+        if "origin" not in existing_columns:
+            await db.execute(
+                "ALTER TABLE aweme ADD COLUMN origin TEXT NOT NULL DEFAULT ''"
+            )
+
         await db.commit()
         self._initialized = True
 
@@ -241,6 +286,45 @@ class Database:
         result = await cursor.fetchone()
         return result is not None
 
+    async def is_downloaded_batch(self, aweme_ids: List[str]) -> set:
+        """批量版 ``is_downloaded``：一次查询判定一批作品是否已有下载记录。
+
+        增量扫描早停会在每页（20 条）调用一次，逐条查会变成 N 次往返；
+        这里按 400 一批走 IN 查询，语义与单条版完全一致（file_path 非空）。
+        """
+        ids = [str(x) for x in aweme_ids if x]
+        if not ids:
+            return set()
+        db = await self._get_conn()
+        found: set = set()
+        for i in range(0, len(ids), 400):
+            chunk = ids[i:i + 400]
+            marks = ",".join("?" * len(chunk))
+            cursor = await db.execute(
+                "SELECT aweme_id FROM aweme WHERE aweme_id IN (%s) "
+                "AND file_path IS NOT NULL AND file_path != ''" % marks,
+                chunk,
+            )
+            for (aid,) in await cursor.fetchall():
+                found.add(str(aid))
+        return found
+
+    async def get_downloaded_aweme_ids_by_author(self, author_sec_uid: str) -> set:
+        """作者名下「已有下载记录」的 aweme_id 集合（file_path 非空）。
+
+        增量扫描早停用：文件被移动/改名后不在文件名索引里，但历史库仍有
+        记录 —— 不并入的话每次都会把这几条当新作品重下一遍。
+        """
+        if not author_sec_uid:
+            return set()
+        db = await self._get_conn()
+        cursor = await db.execute(
+            "SELECT aweme_id FROM aweme WHERE author_sec_uid = ? "
+            "AND file_path IS NOT NULL AND file_path != ''",
+            (str(author_sec_uid),),
+        )
+        return {str(row[0]) for row in await cursor.fetchall()}
+
     # Preserving upsert: metadata-ish fields always update, but download
     # artifacts (file_path / metadata / download_time) and enrichments
     # (cover_urls / job_id) survive upserts that arrive without them.
@@ -249,8 +333,8 @@ class Database:
     _AWEME_UPSERT_SQL = """
         INSERT INTO aweme
         (aweme_id, aweme_type, title, author_id, author_name, author_sec_uid,
-         create_time, download_time, file_path, metadata, cover_urls, job_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         create_time, download_time, file_path, metadata, cover_urls, job_id, origin)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(aweme_id) DO UPDATE SET
           aweme_type = CASE WHEN COALESCE(excluded.aweme_type, '') != ''
                             THEN excluded.aweme_type
@@ -284,7 +368,10 @@ class Database:
                             ELSE aweme.cover_urls END,
           job_id = CASE WHEN excluded.job_id != ''
                         THEN excluded.job_id
-                        ELSE aweme.job_id END
+                        ELSE aweme.job_id END,
+          origin = CASE WHEN excluded.origin != ''
+                        THEN excluded.origin
+                        ELSE aweme.origin END
     """
 
     @staticmethod
@@ -305,6 +392,7 @@ class Database:
             item.get("metadata"),
             item.get("cover_urls") or "",
             item.get("job_id") or "",
+            item.get("origin") or "",
         )
 
     async def add_aweme(

@@ -185,7 +185,8 @@ async def download_url(
             if result:
                 progress_reporter.advance_step(
                     "收尾",
-                    f"成功 {result.success} / 失败 {result.failed} / 跳过 {result.skipped}",
+                    f"成功 {result.success} / 失败 {result.failed} / "
+                    f"跳过 {result.skipped} / 付费 {result.paid}",
                 )
             else:
                 progress_reporter.advance_step("收尾", "无可统计结果")
@@ -261,7 +262,19 @@ async def main_async(args):
     if config.get("database"):
         db_path = config.get("database_path", "dy_downloader.db") or "dy_downloader.db"
         database = Database(db_path=str(db_path))
-        await database.initialize()
+        try:
+            await database.initialize()
+        except Exception as e:
+            # sqlite 的 "unable to open database file" 信息量几乎为零：目录缺失、
+            # 目录只读、被别的进程锁死都是这一句。这里补一句人话，把**解析后的
+            # 绝对路径**打出来 —— 相对路径（`../../data/douyin/...`）按 CWD
+            # 解析，光看配置看不出它到底落在哪。
+            import os as _os
+            display.print_error(
+                "打不开数据库：%s\n  数据库路径: %s\n  解析后绝对路径: %s\n"
+                "  常见原因: 上级目录不存在（sqlite 不会自动建目录）或被清理掉了、"
+                "目录只读、别处的同名库占用着。" % (e, db_path, _os.path.abspath(str(db_path))))
+            raise
         display.print_success("Database initialized")
 
     urls = config.get_links()
@@ -313,6 +326,7 @@ async def main_async(args):
             total_result.success += r.success
             total_result.failed += r.failed
             total_result.skipped += r.skipped
+            total_result.paid += r.paid
 
         display.print_success("\n=== Overall Summary ===")
         display.show_result(total_result)
@@ -381,7 +395,7 @@ async def _dispatch_notifications(config: ConfigLoader, total_result: Any, url_c
         body = (
             f"链接 {url_count} / 总作品 {total_result.total} / "
             f"成功 {total_result.success} / 失败 {total_result.failed} / "
-            f"跳过 {total_result.skipped}"
+            f"跳过 {total_result.skipped} / 付费 {total_result.paid}"
         )
 
     try:

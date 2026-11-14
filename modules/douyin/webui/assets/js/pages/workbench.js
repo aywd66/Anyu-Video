@@ -20,6 +20,7 @@
     douyin: { modes: ['post'], number: 0, quality: 'highest', increase: true, ytFormat: 'video' },
     tiktok: { modes: ['post'], number: 0, quality: 'highest', increase: true, ytFormat: 'video' },
     youtube: { modes: ['post'], number: 0, quality: 'highest', increase: true, ytFormat: 'video' },
+    bilibili: { modes: ['post'], number: 0, quality: 'highest', increase: true, biliFormat: 'video' },
   };
 
   function render(view, platformId) {
@@ -29,6 +30,37 @@
     view.className = 'content acc-' + P.accent;
     view.dataset.platform = platformId;
 
+    /* 哔哩哔哩的输入已统一到启动台（2026-11-07）：classifyLink 会把
+     * bilibili.com / b23.tv 自动路由到哔哩哔哩通道。本页只保留登录态
+     * 管理与最近任务 —— 避免出现第二个可用输入口。 */
+    const unifiedCard =
+      '<section class="section"><div class="empty">' +
+        '<div class="empty__title">哔哩哔哩链接输入已统一</div>' +
+        '<div class="empty__desc">bilibili.com / b23.tv 链接请在启动台的「链接下载」入口粘贴，' +
+        '会自动识别并路由到哔哩哔哩通道（登录态管理仍在本页底部）。</div>' +
+        '<button class="btn btn--primary btn--sm" data-go="launch/toolbox">去启动台粘贴链接</button>' +
+      '</div></section>';
+
+    if (platformId === 'bilibili') {
+      view.className = 'content acc-' + P.accent;
+      view.dataset.platform = platformId;
+      view.innerHTML =
+        '<div class="crumb"><span class="crumb__dot"></span>' + esc(P.crumb) + '</div>' +
+        '<div class="page-head">' +
+          '<h1 class="page-title">' + esc(P.titleA) + '<span class="accent">' + esc(P.titleB) + '</span></h1>' +
+          '<p class="page-sub">' + esc(P.sub) + '</p></div>' +
+        unifiedCard +
+        '<section class="section" aria-label="最近任务">' +
+          '<div class="section__head"><h2 class="card__title">最近任务</h2>' +
+          '<button class="btn btn--ghost btn--sm right" data-go="tasks">全部任务' + I.icon('chevronRight', 14) + '</button></div>' +
+          '<div id="wb-recent"></div>' +
+        '</section>';
+      renderRecent(view, platformId);
+      view.querySelectorAll('[data-go]').forEach((b) =>
+        b.addEventListener('click', () => window.DYRouter.go(b.dataset.go)));
+      return;
+    }
+
     view.innerHTML =
       /* —— 页头 —— */
       '<div class="crumb"><span class="crumb__dot"></span>' + esc(P.crumb) + '</div>' +
@@ -37,8 +69,8 @@
         '<p class="page-sub">' + esc(P.sub) + '</p>' +
       '</div>' +
 
-      /* —— 主输入卡 —— */
-      '<section class="card card--hero mb-5" aria-label="链接输入">' +
+      /* —— 主输入卡（hero 保留卡片强调） —— */
+      '<section class="card card--hero" aria-label="链接输入">' +
         '<div class="card__label"><span class="card__label-dot"></span>' + esc(P.cardLabel) + '</div>' +
         '<div class="card__title">' + esc(P.cardTitle || '下载链接') + '</div>' +
         '<div class="input-group mt-4">' +
@@ -53,27 +85,28 @@
         '</div>' +
       '</section>' +
 
-      /* —— 本次设置卡 —— */
-      '<section class="card mb-5" aria-label="本次下载设置">' +
-        '<div class="flex mb-4"><div><div class="card__title" style="margin:0">本次下载设置</div>' +
-        '<p class="small faint mt-2" style="margin:0">只影响本次任务；长期默认值请到「设置」页修改。</p></div></div>' +
+      /* —— 本次设置（去卡片化：区块直接坐在页面上） —— */
+      '<section class="section" aria-label="本次下载设置">' +
+        '<div class="section__head"><div><div class="card__title">本次下载设置</div>' +
+        '<p class="small faint mt-2">只影响本次任务；长期默认值请到「设置」页修改。</p></div></div>' +
         '<div id="wb-options"></div>' +
       '</section>' +
 
       /* —— 最近任务 —— */
-      '<section aria-label="最近任务">' +
-        '<div class="flex mb-4"><h2 class="card__title" style="margin:0">最近任务</h2>' +
+      '<section class="section" aria-label="最近任务">' +
+        '<div class="section__head"><h2 class="card__title">最近任务</h2>' +
         '<button class="btn btn--ghost btn--sm right" data-go="tasks">全部任务' + I.icon('chevronRight', 14) + '</button></div>' +
         '<div id="wb-recent"></div>' +
       '</section>';
 
     renderOptions(view, platformId, opt);
     renderRecent(view, platformId);
-    if (window.DYApi.isBridge() && platformId !== 'douyin') {
-      // 桥接模式能力边界：CLI 仅覆盖抖音
+    const BRIDGE_OK = ['douyin', 'bilibili'];
+    if (window.DYApi.isBridge() && !BRIDGE_OK.includes(platformId)) {
+      // 桥接模式能力边界：真实下载仅覆盖抖音与哔哩哔哩
       view.querySelector('#wb-go').disabled = true;
       view.querySelector('#wb-status').innerHTML =
-        '<span class="dot dot--amber"></span><span class="muted">桥接模式当前仅支持抖音链接下载；TikTok / YouTube 请使用官方桌面端</span>';
+        '<span class="dot dot--amber"></span><span class="muted">桥接模式当前支持抖音 / 哔哩哔哩链接下载；TikTok / YouTube 请使用官方桌面端</span>';
     }
 
     /* —— 交互绑定 —— */
@@ -134,11 +167,23 @@
       }
       goBtn.disabled = true;
       try {
-        if (window.DYApi.isBridge() && platformId !== 'douyin') {
-          C.toast('桥接模式当前仅支持抖音链接；TikTok/YouTube 请使用官方桌面端', 'err');
+        if (window.DYApi.isBridge() && platformId !== 'douyin' && platformId !== 'bilibili') {
+          C.toast('桥接模式当前支持抖音 / 哔哩哔哩链接；TikTok/YouTube 请使用官方桌面端', 'err');
           return;
         }
-        if (window.DYApi.isBridge()) {
+        if (window.DYApi.isBridge() && platformId === 'bilibili') {
+          // 哔哩哔哩：URL 类型后端自动识别（单作品/主页/直播）；
+          // 音频仅单作品语义生效；图文走主页动态流；数量上限折算成限量 N。
+          const biliMode = opt.biliFormat === 'audio' ? 'audio'
+            : opt.biliFormat === 'posts' ? 'posts'
+            : (opt.number > 0 ? String(opt.number) : 'all');
+          for (let i = 0; i < urls.length; i++) {
+            await window.DYApi.biliBridgeSubmit(urls[i], biliMode);
+          }
+          C.toast(urls.length > 1
+            ? '已提交 ' + urls.length + ' 个哔哩哔哩任务（自动排队）'
+            : '已提交哔哩哔哩任务（自动识别单作品/主页/直播/图文）', 'ok');
+        } else if (window.DYApi.isBridge()) {
           // 真实下载：逐条提交，桥接服务内部排队（并发 2）
           const bridgeOpts = { modes: opt.modes, number: opt.number, quality: opt.quality, increase: opt.increase };
           for (let i = 0; i < urls.length; i++) {
@@ -190,8 +235,13 @@
   }
 
   function modeLabel(opt) {
-    if (window.DYRouter.current === 'youtube') {
+    const cur = window.DYRouter.current;
+    if (cur === 'youtube') {
       const f = window.DYConfig.YT_FORMAT.find((x) => x.id === opt.ytFormat);
+      return f ? f.label : '视频 MP4';
+    }
+    if (cur === 'bilibili') {
+      const f = window.DYConfig.BILI_FORMAT.find((x) => x.id === opt.biliFormat);
       return f ? f.label : '视频 MP4';
     }
     return opt.modes.join('+') || 'post';
@@ -220,6 +270,24 @@
           '<button class="chip' + (opt.ytFormat === f.id ? ' is-on' : '') + '" data-ytfmt="' + esc(f.id) + '">' +
           esc(f.label) + '</button>'
         ).join('') + '</div></div>';
+    }
+    if (P.options.includes('biliFormat')) {
+      html +=
+        '<div class="form-item"><div class="form-item__label">下载格式<span class="form-item__desc" style="margin:0 0 0 8px">仅单作品生效；主页批量恒为视频</span></div>' +
+        '<div class="chips" id="opt-bilifmt">' +
+        cfg.BILI_FORMAT.map((f) =>
+          '<button class="chip' + (opt.biliFormat === f.id ? ' is-on' : '') + '" data-bilifmt="' + esc(f.id) + '">' +
+          esc(f.label) + '</button>'
+        ).join('') + '</div></div>';
+      /* 登录态就放在「下载格式」下面：画质与登录是同一件事 —— 游客只能拿 720P，
+       * 扫码登录后 1080P/大会员才可选。入口放在这里，用户不必再跑去设置页。 */
+      html +=
+        '<div class="form-item"><div class="form-item__label">登录态' +
+          '<span class="form-item__desc" style="margin:0 0 0 8px">扫码获取 Cookie，解锁 1080P / 大会员画质</span></div>' +
+          '<div class="flex" style="gap:8px;align-items:center">' +
+            '<span class="small muted" id="wb-bili-login">读取中 …</span>' +
+            '<button class="btn btn--ghost btn--sm" id="wb-bili-qr">扫码获取 Cookie</button>' +
+          '</div></div>';
     }
     html += '<div class="grid grid--2">';
     if (P.options.includes('number')) {
@@ -279,6 +347,31 @@
           c.classList.toggle('is-on', c.dataset.ytfmt === opt.ytFormat));
       });
     });
+    box.querySelectorAll('[data-bilifmt]').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        opt.biliFormat = chip.dataset.bilifmt;
+        box.querySelectorAll('[data-bilifmt]').forEach((c) =>
+          c.classList.toggle('is-on', c.dataset.bilifmt === opt.biliFormat));
+      });
+    });
+    /* 哔哩哔哩登录态 + 扫码入口（与设置页共用同一个弹窗组件） */
+    const biliQrBtn = box.querySelector('#wb-bili-qr');
+    if (biliQrBtn) {
+      const loginEl = box.querySelector('#wb-bili-login');
+      const refreshBili = async () => {
+        try {
+          const d = await window.DYApi.biliCookieGet();
+          loginEl.innerHTML = d.has_cookie
+            ? '<span class="dot dot--green"></span>已登录' +
+              (d.uname ? '（' + esc(d.uname) + '）' : '') + '，可下载高清晰度'
+            : '<span class="dot dot--faint"></span>未登录（游客最高 720P）';
+        } catch (e) {
+          loginEl.textContent = '登录态读取失败';
+        }
+      };
+      biliQrBtn.addEventListener('click', () => C.biliLogin(() => refreshBili()));
+      refreshBili();
+    }
     const numInput = box.querySelector('#opt-number');
     if (numInput) numInput.addEventListener('change', () => {
       opt.number = Math.max(0, Math.min(9999, parseInt(numInput.value, 10) || 0));
@@ -323,27 +416,46 @@
     const id = btn.dataset.id;
     const act = btn.dataset.act;
     const store = window.DYStore;
+    if (act === 'copy') {
+      // 与任务中心一致：复制按钮上带的 data-copy（任务行渲染时填好的）
+      const text = btn.dataset.copy || '';
+      if (!text) { C.toast('这个任务没有可复制的链接', 'err'); return; }
+      U.copyText(text).then((ok) => C.toast(ok ? window.DYConfig.TEXT.copied : '复制失败', ok ? 'ok' : 'err'));
+      return;
+    }
     const t = store.state.tasks.find((x) => x.id === id);
+    // 桥接任务（b/k/d 前缀）不在前端 store 里 —— 直接 return 会让「取消/重试」
+    // 点了毫无反应（2026-11-01 修，与任务中心同一处坑）。
+    if (!t && window.DYApi.isBridge()) {
+      if (act === 'cancel') {
+        window.DYApi.cancelTask(id)
+          .then(() => C.toast('已请求取消', 'ok'))
+          .catch((err) => C.toast(err.message, 'err'));
+      } else if (act === 'retry') {
+        C.retryTask(id);
+      }
+      const v = document.getElementById('page-view');
+      renderRecent(v, v.dataset.platform);
+      window.DYApp.updateTaskBadge();
+      return;
+    }
     if (!t) return;
     if (act === 'cancel') {
       window.DYApi.cancelTask(id);
       C.toast('任务已取消', 'ok');
     } else if (act === 'retry') {
-      window.DYApi.retryTask(id);
-      C.toast('已重新排队', 'ok');
+      C.retryTask(id);
     } else if (act === 'remove') {
       store.removeTask(id);
       C.toast('任务已移除', 'ok');
-    } else if (act === 'copy') {
-      U.copyText(t.url).then((ok) => C.toast(ok ? window.DYConfig.TEXT.copied : '复制失败', ok ? 'ok' : 'err'));
     }
     const view = document.getElementById('page-view');
     renderRecent(view, view.dataset.platform);
     window.DYApp.updateTaskBadge();
   }
 
-  /* —— 注册三个平台路由 —— */
-  ['douyin', 'tiktok', 'youtube'].forEach((pid) => {
+  /* —— 注册平台路由 —— */
+  ['douyin', 'bilibili', 'tiktok', 'youtube'].forEach((pid) => {
     window.DYRouter.register(pid, (view) => {
       render(view, pid);
       window.DYApp.updatePlatformUI(pid);

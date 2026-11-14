@@ -335,6 +335,7 @@ class LiveReplayDownloader(BaseDownloader):
                     "author_sec_uid": owner_sec_uid,
                     "cover_urls": json.dumps([]),
                     "job_id": self.job_id or "",
+                    "origin": self.origin or "",
                 }
             )
         await self.metadata_handler.append_download_manifest(

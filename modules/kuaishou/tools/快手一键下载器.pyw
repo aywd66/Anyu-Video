@@ -28,8 +28,10 @@ def _find_root():
     return os.path.dirname(_here)
 
 _TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTDIR = os.path.join(_find_root(), "data", "kuaishou")
-PROFILE = os.path.join(_find_root(), "runtime", "kuaishou-login-profile")
+# 同 kuaishou_headless：产物根目录可被 KS_OUTDIR 覆盖（启动台改目录后 GUI 也跟走）
+OUTDIR = os.environ.get("KS_OUTDIR") or os.path.join(_find_root(), "data", "kuaishou")
+PROFILE = (os.environ.get("KS_PROFILE")
+           or os.path.join(_find_root(), "runtime", "kuaishou-login-profile"))
 LOG_PATH = os.path.join(OUTDIR, "download_log.json")
 LOGIN_KEYS = ("passToken", "kuaishou.server.web_st", "kuaishou.server.web_day7_st", "userId")
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -283,6 +285,11 @@ class App:
 def main():
     root = tk.Tk()
     app = App(root)
+    # 命令行传链接（WebUI 桥接服务唤起时用）：自动填入输入框并自动开始，
+    # 用户无需手动粘贴。无参数双击时行为与原来完全一致。
+    if len(sys.argv) > 1 and sys.argv[1].strip():
+        app.entry.insert(0, sys.argv[1].strip())
+        root.after(400, app.start)
     def poll_done():
         try:
             while True:

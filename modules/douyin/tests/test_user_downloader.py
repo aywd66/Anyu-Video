@@ -225,7 +225,8 @@ def test_user_post_browser_fallback_recovers_missing_pages(tmp_path, monkeypatch
     assert result.total == 3
     assert result.success == 3
     assert api_client.browser_calls == 1
-    assert api_client.browser_call_kwargs[0].get("expected_count") == 0
+    # number 未设上限时，扫描目标取主页作品总数，让浏览器兜底翻到真正的列表末尾
+    assert api_client.browser_call_kwargs[0].get("expected_count") == 3
     assert api_client.detail_calls == ["222", "333"]
     assert all(call.get("suppress_error") is True for call in api_client.detail_call_kwargs)
 
@@ -370,6 +371,9 @@ def test_user_post_reports_step_and_item_progress(tmp_path, monkeypatch):
         browser_enabled=True,
         progress_reporter=reporter,
     )
+    # 这条用例只关心「上报了什么」，不关心失败自愈；关掉自愈轮，免得它在这里
+    # 真睡满 20s + 40s 的冷却（自愈本身由 test_failure_recovery.py 覆盖）。
+    downloader.config._data["failure_retry_passes"] = 0
 
     async def _fake_should_download(aweme_id, **_kwargs):
         return aweme_id != "222"
@@ -582,3 +586,43 @@ def test_homepage_screenshot_skips_collect_context(tmp_path):
     )
 
     assert api_client.homepage_screenshot_calls == []
+
+
+def test_paid_content_counts_as_paid_not_failed(tmp_path, monkeypatch):
+    """付费/会员内容（CENC 密文）记「付费跳过」，不计失败。
+
+    回归 2026-10-23：750 条批量里 22 条付费作品被记成「失败」，任务卡红成一片，
+    实际一条都不是故障 —— 抖音下发的是 CENC 加密流，重试一万次也解不开。
+    """
+    api_client = _FakeAPIClient()
+    downloader = _build_downloader(tmp_path, api_client, browser_enabled=True)
+    # 只看归类，不跑失败自愈（那会真睡冷却）
+    downloader.config._data["failure_retry_passes"] = 0
+
+    async def _always_true(*_args, **_kwargs):
+        return True
+
+    async def _fake_download_aweme_assets(item, *_args, **kwargs):
+        outcome = kwargs.get("outcome")
+        if item.get("aweme_id") == "222":
+            if outcome is not None:
+                outcome["status"] = "paid"
+                outcome["note"] = "付费/会员内容（CENC 加密，本地无法播放）"
+            return False
+        return True
+
+    monkeypatch.setattr(downloader, "_should_download", _always_true)
+    monkeypatch.setattr(downloader, "_download_aweme_assets", _fake_download_aweme_assets)
+
+    result = asyncio.run(
+        downloader._download_user_post(
+            "sec_uid_x",
+            {"uid": "uid-1", "nickname": "tester", "aweme_count": 3},
+        )
+    )
+
+    assert result.total == 3
+    assert result.success == 2
+    assert result.paid == 1
+    assert result.failed == 0
+    assert result.skipped == 0

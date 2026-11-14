@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import time
+from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Set
 
 import aiofiles
 
-from core.downloader_base import BaseDownloader, DownloadResult
+from core.downloader_base import BaseDownloader, DownloadResult, entry_status
 from core.metadata import build_author_home_url
 from core.user_mode_registry import UserModeRegistry
 from utils.logger import setup_logger
@@ -73,12 +75,14 @@ class UserDownloader(BaseDownloader):
                 self._merge_result(result, mode_result)
 
         logger.info(
-            "User download finished: duration_ms=%s total=%s success=%s failed=%s skipped=%s",
+            "User download finished: duration_ms=%s total=%s success=%s failed=%s "
+            "skipped=%s paid=%s",
             int((time.monotonic() - download_started) * 1000),
             result.total,
             result.success,
             result.failed,
             result.skipped,
+            result.paid,
         )
         return result
 
@@ -227,13 +231,14 @@ class UserDownloader(BaseDownloader):
         result = await strategy.download_mode(sec_uid, user_info, seen_aweme_ids=seen_aweme_ids)
         logger.info(
             "User mode finished: mode=%s duration_ms=%s total=%s success=%s "
-            "failed=%s skipped=%s unique_seen=%s",
+            "failed=%s skipped=%s paid=%s unique_seen=%s",
             mode,
             int((time.monotonic() - started) * 1000),
             result.total,
             result.success,
             result.failed,
             result.skipped,
+            result.paid,
             len(seen_aweme_ids),
         )
         return result
@@ -244,6 +249,7 @@ class UserDownloader(BaseDownloader):
         target.success += source.success
         target.failed += source.failed
         target.skipped += source.skipped
+        target.paid += source.paid
 
     def _validate_mode_scope(self, sec_uid: str, modes: List[str]) -> bool:
         normalized_modes = {str(mode or "").strip() for mode in modes}
@@ -293,6 +299,17 @@ class UserDownloader(BaseDownloader):
         if isinstance(value, str):
             return value.strip().lower() in {"1", "true", "yes", "on"}
         return bool(value)
+
+    def _increase_enabled(self, mode: str = "post") -> bool:
+        """该模式是否处于「增量」语义（只下新的）。
+
+        早停只在增量下成立：增量意味着「更早的已经下过、不用再看」，
+        而强制重下（increase=false）必须把整份列表扫全。
+        """
+        raw = self.config.get("increase", {})
+        if not isinstance(raw, dict):
+            return True
+        return self._as_bool(raw.get(mode, True))
 
     async def _resolve_user_info(self, sec_uid: str, modes: List[str]) -> Optional[Dict[str, Any]]:
         normalized_modes = {str(mode or "").strip() for mode in modes}
@@ -408,52 +425,77 @@ class UserDownloader(BaseDownloader):
             and not bool(increase_config.get(mode))
         )
 
-        async def _process_aweme(item: Dict[str, Any]):
+        async def _process_aweme(item: Dict[str, Any], *, report: bool = True):
             aweme_id = item.get("aweme_id")
-            if not await self._should_download(
-                str(aweme_id or ""),
-                force=force_download,
-            ):
-                saved = await self._collect_comments_for_existing_aweme(
-                    item,
-                    author_name,
-                    mode,
-                    author_sec_uid=author_sec_uid,
-                )
-                status = "success" if saved else "skipped"
-                self._progress_advance_item(status, str(aweme_id or "unknown"))
+
+            def _finish(status: str) -> Dict[str, Any]:
+                # 自愈轮重跑的是已经记过账的条目，不再推进条目计数（见
+                # BaseDownloader._recover_failed_items）。
+                if report:
+                    self._progress_advance_item(status, str(aweme_id or "unknown"))
                 return {"status": status, "aweme_id": aweme_id}
 
-            success = await self._download_aweme_assets(
-                item,
-                author_name,
-                mode=mode,
-                db_batch=db_batch,
-                author_sec_uid=author_sec_uid,
-            )
-            status = "success" if success else "failed"
-            self._progress_advance_item(status, str(aweme_id or "unknown"))
-            return {
-                "status": status,
-                "aweme_id": aweme_id,
-            }
+            try:
+                if not await self._should_download(
+                    str(aweme_id or ""),
+                    force=force_download,
+                ):
+                    saved = await self._collect_comments_for_existing_aweme(
+                        item,
+                        author_name,
+                        mode,
+                        author_sec_uid=author_sec_uid,
+                    )
+                    return _finish("success" if saved else "skipped")
+
+                outcome: Dict[str, str] = {}
+                success = await self._download_aweme_assets(
+                    item,
+                    author_name,
+                    mode=mode,
+                    db_batch=db_batch,
+                    author_sec_uid=author_sec_uid,
+                    outcome=outcome,
+                )
+            except asyncio.CancelledError:
+                # 用户取消要继续往上走，别当成「这条作品失败了」。
+                raise
+            except Exception:
+                # 兜底成一条失败而不是让异常逃出去：逃出去的话条目计数就少了
+                # 一条（进度条停住），而统计修正又是按「已记过账」算的。
+                logger.exception("Aweme %s failed with an unexpected error", aweme_id)
+                return _finish("failed")
+            if success:
+                return _finish("success")
+            # 付费/会员内容下不来是预期内的（CENC 密文，重试也没用）：
+            # 记「付费跳过」，不计入失败，也不进失败自愈轮。
+            if outcome.get("status") == "paid":
+                logger.info(
+                    "Aweme %s 付费跳过：%s", aweme_id, outcome.get("note") or "付费/会员内容"
+                )
+                return _finish("paid")
+            return _finish("failed")
 
         download_results = await self.queue_manager.download_batch(_process_aweme, deduped_items)
+
+        statuses = [entry_status(entry) for entry in download_results]
+        # 源站的短时封禁不该变成本次任务的永久失败：主轮跑完后补跑几轮。
+        await self._recover_failed_items(
+            deduped_items, statuses, partial(_process_aweme, report=False)
+        )
 
         if db_batch:
             await self.database.add_aweme_batch(db_batch)
 
-        for entry in download_results:
-            status = entry.get("status") if isinstance(entry, dict) else None
+        for status in statuses:
             if status == "success":
                 result.success += 1
-            elif status == "failed":
-                result.failed += 1
             elif status == "skipped":
                 result.skipped += 1
+            elif status == "paid":
+                result.paid += 1
             else:
                 result.failed += 1
-                self._progress_advance_item("failed", "unknown")
 
         return result
 
@@ -481,6 +523,21 @@ class UserDownloader(BaseDownloader):
         # 在分页受限场景下，user_info.aweme_count 常常不可靠（经常只返回 20）
         # 媒体筛选需要先拿到详情才能判断，不能用原始 ID 数提前截断。
         expected_count = 0 if item_filter else int(number_limit or 0)
+        # number 未设上限时，用主页作品总数当扫描目标：让页面内翻页一路翻到
+        # 真正的列表末尾，而不是撞上翻页页数上限就停。仅当 aweme_count 明显
+        # 大于已采集量时才采信，避免受限时失真的「20」把翻页提前掐断。
+        if expected_count <= 0 and not item_filter:
+            try:
+                profile_count = int(user_info.get("aweme_count") or 0)
+            except (TypeError, ValueError):
+                profile_count = 0
+            if profile_count > len(aweme_list):
+                expected_count = profile_count
+                logger.info(
+                    "Browser fallback target from profile aweme_count: %s (existing=%s)",
+                    profile_count,
+                    len(aweme_list),
+                )
         if self._post_recovery_limit_reached(aweme_list, number_limit, item_filter):
             logger.info(
                 "Browser fallback skipped: number limit reached existing=%s limit=%s",
@@ -490,15 +547,48 @@ class UserDownloader(BaseDownloader):
             return
 
         fallback_started = time.monotonic()
+        # 「一键更新」的早停依据：本地已下载的 aweme_id 集合。
+        # ⚠️ 只在增量模式（increase.post=true）下给：强制重下时必须把整份列表
+        #    扫全，否则用户点「重下」只会拿回最新那几条。
+        known_ids = None
+        known_stop = 40
+        if self._increase_enabled("post"):
+            try:
+                await self._ensure_local_aweme_index()
+                known_ids = set(self._local_aweme_ids or set())
+                # 「本地库」不能只看文件名索引：文件被移动/改名过的作品仍在
+                # 下载历史里，一并算作已下载（与 _should_download 的兜底一致）。
+                if self.database is not None:
+                    try:
+                        known_ids |= await self.database.get_downloaded_aweme_ids_by_author(
+                            str(user_info.get("sec_uid") or sec_uid)
+                        )
+                    except Exception as exc:  # noqa: BLE001 - 查不到就只用文件名索引
+                        logger.debug("Author DB ids unavailable for early stop: %s", exc)
+                raw_early = browser_cfg.get("early_stop_known", 40)
+                try:
+                    browser_cfg_early = int(raw_early)
+                except (TypeError, ValueError):
+                    browser_cfg_early = 40
+                if browser_cfg_early <= 0 or not known_ids:
+                    # 0 = 明确关闭早停
+                    known_ids = None
+                    logger.info("Early stop disabled (early_stop_known=%s)", raw_early)
+                else:
+                    known_stop = browser_cfg_early
+            except Exception as exc:  # noqa: BLE001 — 早停是优化，取不到就退回全量扫描
+                logger.debug("Early-stop index unavailable, scanning full list: %s", exc)
+                known_ids = None
         logger.info(
             "Browser fallback started: existing=%s expected_count=%s headless=%s "
-            "max_scrolls=%s idle_rounds=%s timeout_s=%s",
+            "max_scrolls=%s idle_rounds=%s timeout_s=%s early_stop_known=%s",
             len(aweme_list),
             expected_count,
             bool(browser_cfg.get("headless", False)),
             int(browser_cfg.get("max_scrolls", 240) or 240),
             int(browser_cfg.get("idle_rounds", 8) or 8),
             int(browser_cfg.get("wait_timeout_seconds", 600) or 600),
+            (known_stop if known_ids is not None else "off"),
         )
         try:
             browser_aweme_ids = await self.api_client.collect_user_post_ids_via_browser(
@@ -508,6 +598,8 @@ class UserDownloader(BaseDownloader):
                 max_scrolls=int(browser_cfg.get("max_scrolls", 240) or 240),
                 idle_rounds=int(browser_cfg.get("idle_rounds", 8) or 8),
                 wait_timeout_seconds=int(browser_cfg.get("wait_timeout_seconds", 600) or 600),
+                known_ids=known_ids,
+                known_stop=known_stop,
             )
         except Exception:
             logger.exception(
@@ -616,6 +708,33 @@ class UserDownloader(BaseDownloader):
                 "Browser fallback detail fetch failed: %s/%s",
                 detail_failed,
                 total_missing,
+            )
+        self._verify_scan_total(aweme_list, user_info)
+
+    @staticmethod
+    def _verify_scan_total(
+        aweme_list: List[Dict[str, Any]],
+        user_info: Dict[str, Any],
+    ) -> None:
+        """扫描结束后与主页作品总数对账。
+
+        少扫必须在任务日志里留下 ERROR 级证据（任务中心默认只收 ERROR），
+        否则「主页 1794 / 实扫 1192」这种静默缺漏用户根本无从发现。
+        差 2 条以内视为正常波动（扫描期间新增/删除作品）。
+        """
+        try:
+            profile_count = int(user_info.get("aweme_count") or 0)
+        except (TypeError, ValueError):
+            return
+        deficit = profile_count - len(aweme_list)
+        if deficit > 2:
+            logger.error(
+                "作品扫描数量与主页不一致：实扫 %s 条，主页显示 %s 条（缺 %s 条）。"
+                "常见原因：接口分页被风控截断 / 回补阶段部分详情拉取失败。"
+                "可稍后重试、重新登录刷新 Cookie，或调大 browser_fallback 配置后重跑。",
+                len(aweme_list),
+                profile_count,
+                deficit,
             )
 
     @staticmethod

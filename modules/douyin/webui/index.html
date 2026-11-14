@@ -3,15 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="抖音下载器 Web UI — 按官方桌面端 Douzy 参考实现的网页版工作台">
-  <title>Douzy · 抖音下载器 Web UI</title>
+  <meta name="description" content="视频下载工具箱 — 抖音 / 快手 / 哔哩哔哩 / TikTok / YouTube / 直链下载与直播流录制，统一入口自动识别路由">
+  <title>视频下载工具箱</title>
   <link rel="icon" type="image/png" href="assets/img/logo.png">
   <!-- 设计系统（改主题只动 tokens.css） -->
-  <link rel="stylesheet" href="assets/css/tokens.css?v=7">
-  <link rel="stylesheet" href="assets/css/base.css?v=7">
-  <link rel="stylesheet" href="assets/css/layout.css?v=7">
-  <link rel="stylesheet" href="assets/css/components.css?v=7">
-  <link rel="stylesheet" href="assets/css/planc-home.css?v=7">
+  <link rel="stylesheet" href="assets/css/tokens.css?v=11">
+  <link rel="stylesheet" href="assets/css/base.css?v=11">
+  <link rel="stylesheet" href="assets/css/layout.css?v=11">
+  <link rel="stylesheet" href="assets/css/components.css?v=17">
+  <link rel="stylesheet" href="assets/css/planc-home.css?v=11">
+  <link rel="stylesheet" href="assets/css/launcher.css?v=11">
 </head>
 <body>
   <noscript>
@@ -21,22 +22,24 @@
   <div id="app"></div>
 
   <!-- 依赖顺序：配置 → 图标 → 工具 → 数据 → 存储 → API → 路由 → 组件 → 骨架 → 页面 -->
-  <script src="assets/js/config.js?v=7"></script>
+  <script src="assets/js/config.js?v=12"></script>
   <script src="assets/js/icons.js"></script>
   <script src="assets/js/utils.js"></script>
   <script src="assets/js/mock-data.js"></script>
   <script src="assets/js/store.js"></script>
-  <script src="assets/js/api.js"></script>
+  <script src="assets/js/api.js?v=7"></script>
   <script src="assets/js/router.js"></script>
-  <script src="assets/js/components.js"></script>
-  <script src="assets/js/app.js?v=7"></script>
-  <script src="assets/js/pages/workbench.js"></script>
-  <script src="assets/js/pages/tasks.js"></script>
-  <script src="assets/js/pages/creators.js"></script>
-  <script src="assets/js/pages/favorites.js"></script>
-  <script src="assets/js/pages/queue.js"></script>
-  <script src="assets/js/pages/archive.js"></script>
-  <script src="assets/js/pages/planc-home.js"></script>
-  <script src="assets/js/pages/settings.js"></script>
+  <script src="assets/js/components.js?v=3"></script>
+  <script src="assets/js/app.js?v=12"></script>
+  <script src="assets/js/pages/workbench.js?v=2"></script>
+  <script src="assets/js/pages/tasks.js?v=4"></script>
+  <script src="assets/js/pages/creators.js?v=2"></script>
+  <script src="assets/js/pages/favorites.js?v=2"></script>
+  <script src="assets/js/pages/queue.js?v=2"></script>
+  <script src="assets/js/pages/archive.js?v=3"></script>
+  <script src="assets/js/pages/planc-home.js?v=2"></script>
+  <script src="assets/js/pages/launcher.js?v=8"></script>
+  <script src="assets/js/pages/settings.js?v=2"></script>
+  <script src="assets/js/pages/live.js?v=2"></script>
 </body>
 </html>

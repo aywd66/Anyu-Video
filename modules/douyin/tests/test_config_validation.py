@@ -1,4 +1,7 @@
 from config import ConfigLoader
+from config.default_config import DEFAULT_CONFIG
+
+_DEFAULT_THREAD = DEFAULT_CONFIG["thread"]
 
 
 def test_validate_normalizes_invalid_thread(tmp_path):
@@ -6,7 +9,7 @@ def test_validate_normalizes_invalid_thread(tmp_path):
     config_file.write_text("link:\n  - https://www.douyin.com/video/123\npath: ./out\nthread: -1\n")
     loader = ConfigLoader(str(config_file))
     assert loader.validate() is True
-    assert loader.get("thread") == 5
+    assert loader.get("thread") == _DEFAULT_THREAD
 
 
 def test_validate_normalizes_invalid_start_time(tmp_path):
@@ -24,4 +27,4 @@ def test_env_thread_invalid_ignored(tmp_path, monkeypatch):
     config_file.write_text("link:\n  - https://www.douyin.com/video/123\npath: ./out\n")
     monkeypatch.setenv("DOUYIN_THREAD", "not_a_number")
     loader = ConfigLoader(str(config_file))
-    assert loader.get("thread") == 5
+    assert loader.get("thread") == _DEFAULT_THREAD

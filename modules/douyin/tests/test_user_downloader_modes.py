@@ -337,7 +337,7 @@ def test_user_downloader_post_mode_uses_batch_db_insert(tmp_path, monkeypatch):
         return True
 
     async def _fake_download_aweme_assets(
-        item, _author, *, mode=None, db_batch=None, author_sec_uid=None
+        item, _author, *, mode=None, db_batch=None, author_sec_uid=None, outcome=None
     ):
         if db_batch is not None:
             db_batch.append(
@@ -512,6 +512,8 @@ def test_post_strategy_browser_recovery_counts_filtered_media(tmp_path, monkeypa
         max_scrolls,
         idle_rounds,
         wait_timeout_seconds,
+        known_ids=None,
+        known_stop=40,
     ):
         browser_expected_counts.append(expected_count)
         return ["gallery-1", "gallery-2"]

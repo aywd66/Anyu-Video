@@ -65,7 +65,7 @@ def test_single_url_overall_progress_follows_item_count(monkeypatch):
     display.advance_item("failed", "a2")
     assert fake_progress.tasks[overall_task_id]["completed"] == 2
 
-    display.complete_url(SimpleNamespace(success=3, failed=1, skipped=1))
+    display.complete_url(SimpleNamespace(success=3, failed=1, skipped=1, paid=0))
     assert fake_progress.tasks[overall_task_id]["completed"] == 5
 
 
@@ -85,7 +85,7 @@ def test_multi_url_overall_progress_stays_url_based(monkeypatch):
     display.advance_item("success", "a1")
     assert fake_progress.tasks[overall_task_id]["completed"] == 0
 
-    display.complete_url(SimpleNamespace(success=8, failed=0, skipped=0))
+    display.complete_url(SimpleNamespace(success=8, failed=0, skipped=0, paid=0))
     assert fake_progress.tasks[overall_task_id]["completed"] == 1
 
     display.start_url(2, 2, "https://example.com/u2")

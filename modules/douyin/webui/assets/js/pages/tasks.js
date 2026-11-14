@@ -27,7 +27,13 @@
           '<div><div class="crumb"><span class="crumb__dot"></span>任务中心 · Tasks</div>' +
           '<h1 class="page-title">任务中心</h1></div>' +
           '<div class="flex">' +
-            '<button class="btn btn--ghost btn--sm" id="tk-clear">' + I.icon('trash', 14) + '清空本地演示记录</button>' +
+            /* 「清空本地演示记录」只对 mock 数据有意义：bridge 模式的任务在
+             * 服务端队列里，没有"本地记录"可清。此前无条件渲染 + 只在 mock
+             * 绑定 → bridge 模式下它是个点了没反应的死按钮（2026-11-07
+             * 全站按钮审计抓到）。现在 mock 模式才渲染。 */
+            (!window.DYApi.isBridge()
+              ? '<button class="btn btn--ghost btn--sm" id="tk-clear">' + I.icon('trash', 14) + '清空本地演示记录</button>'
+              : '') +
             '<button class="btn btn--primary btn--sm" data-go="douyin">' + I.icon('plus', 14) + '新建下载</button>' +
           '</div>' +
         '</div>' +
@@ -64,6 +70,9 @@
   /* ================= BRIDGE 模式 ================= */
   function renderBridge() {
     const view = document.getElementById('page-view');
+    // ⚠️ 每次点筛选/搜索都会再调 renderBridge()，不先清掉旧的就会**越叠越多**，
+    //    同一个列表被好几个定时器同时重绘（表现就是闪烁、进度跳变）。
+    if (window.__DY_PAGE_TIMER) clearInterval(window.__DY_PAGE_TIMER);
     // 实时任务轮询（页面切换时由 router 统一清理）
     window.__DY_PAGE_TIMER = setInterval(refreshBridge, 3000);
     refreshBridge();
@@ -93,18 +102,38 @@
           '<span class="small faint">来自 dy_downloader.db · 只读</span></div>' +
           (hist.length
             ? '<div class="table-wrap"><table class="table"><thead><tr>' +
-              '<th>时间</th><th>类型</th><th>链接</th><th class="num">总数</th><th class="num">成功</th>' +
+              '<th>时间</th><th>类型</th><th>名称</th><th>链接</th><th class="num">总数</th><th class="num">成功</th><th>输出目录</th>' +
               '</tr></thead><tbody>' +
               hist.map((h) =>
                 '<tr><td class="small">' + esc(h.createdAt || '-') + '</td>' +
                 '<td>' + C.mediaType(h.type) + '</td>' +
-                '<td><code class="mono small ellipsis" style="max-width:340px;display:inline-block" title="' + esc(h.url) + '">' +
+                '<td class="small" style="max-width:170px">' + (h.outputName
+                  ? '<span class="ellipsis" style="display:inline-block;max-width:170px;vertical-align:bottom" ' +
+                    'title="' + esc(h.outputNames.join('\n')) + '">' + esc(h.outputName) + '</span>'
+                  : '<span class="faint">未记录</span>') + '</td>' +
+                '<td><code class="mono small ellipsis" style="max-width:300px;display:inline-block" title="' + esc(h.url) + '">' +
                 esc(U.truncate(h.url, 56)) + '</code></td>' +
                 '<td class="num">' + esc(String(h.total)) + '</td>' +
                 '<td class="num" style="color:' + (h.success > 0 ? 'var(--green)' : 'var(--muted)') + '">' +
-                esc(String(h.success)) + '</td></tr>'
+                esc(String(h.success)) + '</td>' +
+                '<td>' + (h.outputDir
+                  ? '<button class="btn btn--ghost btn--sm" data-openpath="' + esc(h.outputDir) + '" ' +
+                    'title="' + esc(h.outputDir) + (h.outputDirs.length > 1
+                      ? '（本批 ' + h.outputDirs.length + ' 个子目录，打开其根目录）' : '') + '">' +
+                    I.icon('openFolder', 14) + '打开</button>'
+                  : '<span class="small faint">未记录</span>') + '</td></tr>'
               ).join('') + '</tbody></table></div>'
             : '<div class="empty"><div class="empty__title">暂无历史记录</div></div>');
+        // 历史表的「打开目录」：路径来自后端查库聚合结果，点开即该批次落盘文件夹
+        hBox.querySelectorAll('[data-openpath]').forEach((b) => {
+          b.addEventListener('click', async () => {
+            try {
+              await window.DYApi.openPath(b.dataset.openpath);
+            } catch (e) {
+              C.toast(e.message || '打开失败', 'err');
+            }
+          });
+        });
       } catch (e) {
         box.innerHTML = '<div class="error-box"><h3>桥接服务不可达</h3><p class="muted">' +
           esc(String(e.message || e)) + '</p></div>';
@@ -145,6 +174,27 @@
         : '<p class="small faint">暂无本地演示记录。</p>') +
       '</div></details>';
     box.querySelector('#tk-local-list').addEventListener('click', onTaskAction);
+  }
+
+  /* 完整日志弹窗 —— 任务行里只贴了尾巴，看全量走这里 */
+  async function openTaskLog(id) {
+    C.open(C.modalFrame('任务日志 · ' + id,
+      '<div class="small faint">正在读取…</div>',
+      '<button class="btn" data-modal-close>关闭</button>', true));
+    const body = document.querySelector('.modal__body');
+    if (!body) return;
+    try {
+      const d = await window.DYApi.bridgeTaskLog(id);
+      const pg = d.progress_info || {};
+      body.innerHTML =
+        '<pre class="task-log" style="max-height:52vh" id="tk-full-log">' + esc(d.log_tail || '(暂无日志)') + '</pre>' +
+        (pg.stage ? '<p class="small faint mt-2">阶段：' + esc(pg.stage) +
+          (pg.total ? ' · 共 ' + esc(String(pg.total)) + ' 个，已完成 ' + esc(String(pg.done || 0)) : '') + '</p>' : '');
+      const pre = body.querySelector('#tk-full-log');
+      if (pre) pre.scrollTop = pre.scrollHeight;   // 日志从头写到尾，默认停在最新处
+    } catch (e) {
+      body.innerHTML = '<div class="error-box"><p class="muted">' + esc(e.message || String(e)) + '</p></div>';
+    }
   }
 
   function matchFilter(t) {
@@ -198,9 +248,10 @@
 
   function clearFinished() {
     const n = window.DYStore.state.tasks.filter((t) =>
-      t.status === 'success' || t.status === 'failed' || t.status === 'canceled').length;
+      t.status === 'success' || t.status === 'braked'
+      || t.status === 'failed' || t.status === 'canceled').length;
     if (!n) { C.toast('没有可清理的任务', 'err'); return; }
-    C.confirm('清理已结束任务', '将移除 ' + n + ' 条已结束（完成/失败/取消）的任务记录，进行中的任务不受影响。', () => {
+    C.confirm('清理已结束任务', '将移除 ' + n + ' 条已结束（完成/守卫刹车/失败/取消）的任务记录，进行中的任务不受影响。', () => {
       window.DYStore.clearFinishedTasks();
       renderAll();
       C.toast('已清理 ' + n + ' 条记录', 'ok');
@@ -214,6 +265,7 @@
       { id: 'all', label: '全部' },
       { id: 'running', label: '进行中' },
       { id: 'success', label: '已完成' },
+      { id: 'braked', label: '守卫刹车' },
       { id: 'failed', label: '失败' },
       { id: 'canceled', label: '已取消' },
     ];
@@ -267,28 +319,52 @@
     const id = btn.dataset.id;
     const act = btn.dataset.act;
     const store = window.DYStore;
-    const isBridgeTask = String(id).indexOf('b') === 0 && String(id).indexOf('bh-') !== 0;
-    if (window.DYApi.isBridge() && isBridgeTask && (act === 'cancel' || act === 'log')) {
+
+    // 复制一律用按钮上带的 data-copy —— 直链任务带的是**解析后的真实下载链接**
+    // （当初粘进去的 /download/<id> 只是取件码，服务端扫描任务一过期就报
+    // "scan task not found or expired"）。也不再从 store 里找任务：桥接任务
+    // 根本不在 store 里，旧写法点下去会静默什么都不做。
+    if (act === 'copy') {
+      const text = btn.dataset.copy || '';
+      if (!text) { C.toast('这个任务没有可复制的链接', 'err'); return; }
+      U.copyText(text).then((ok) => C.toast(ok ? window.DYConfig.TEXT.copied : '复制失败', ok ? 'ok' : 'err'));
+      return;
+    }
+
+    if (act === 'opendir') {
+      window.DYApi.openPath(btn.dataset.openpath || '')
+        .then(() => C.toast('已打开输出目录', 'ok'))
+        .catch((err) => C.toast(err.message || '打开失败', err.offline ? 'warn' : 'err'));
+      return;
+    }
+
+    const t = store.state.tasks.find((x) => x.id === id);
+    // 桥接任务的 id 有 b（抖音）/ k（快手）/ d（直链）三种前缀，按前缀猜必漏 ——
+    // 「不在 store 里 + 桥接模式」才是可靠判据（旧写法让 k/d 任务的日志/取消点了没反应）。
+    // ⚠️ retry 也必须在这里处理：它同样不在 store 里，落在 `if (!t) return` 后面
+    //    就是"点重试毫无反应"（2026-11-01 修）。
+    const isBridgeTask = !t && window.DYApi.isBridge();
+    if (isBridgeTask && (act === 'cancel' || act === 'log' || act === 'retry')) {
       if (act === 'cancel') {
         window.DYApi.cancelTask(id)
           .then(() => C.toast('已请求取消', 'ok'))
           .catch((err) => C.toast(err.message, 'err'));
+      } else if (act === 'retry') {
+        C.retryTask(id);
+      } else {
+        openTaskLog(id);
       }
       return;
     }
-    const t = store.state.tasks.find((x) => x.id === id);
     if (!t) return;
     if (act === 'cancel') {
       window.DYApi.cancelTask(id);
       C.toast('任务已取消', 'ok');
     } else if (act === 'retry') {
-      window.DYApi.retryTask(id);
-      C.toast('已重新排队', 'ok');
+      C.retryTask(id);
     } else if (act === 'remove') {
       store.removeTask(id);
       C.toast('任务已移除', 'ok');
-    } else if (act === 'copy') {
-      U.copyText(t.url).then((ok) => C.toast(ok ? window.DYConfig.TEXT.copied : '复制失败', ok ? 'ok' : 'err'));
     }
     if (window.DYApi.isBridge()) { renderBridge(); renderLocalSection(); }
     else renderAll();

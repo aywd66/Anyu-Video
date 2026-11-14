@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+from functools import partial
 from typing import Any, Dict, List, Optional
 
-from core.downloader_base import BaseDownloader, DownloadResult
+from core.downloader_base import BaseDownloader, DownloadResult, entry_status
 from core.user_modes.base_strategy import BaseUserModeStrategy
 from utils.logger import setup_logger
 
@@ -49,37 +51,57 @@ class MixDownloader(BaseDownloader):
         # Give each 合集 its own folder: <author>/mix/<合集名>/... .
         collection_dir = derive_mix_collection_dir(mix_detail, mix_id)
 
-        async def _process_aweme(item: Dict[str, Any]):
+        async def _process_aweme(item: Dict[str, Any], *, report: bool = True):
             aweme_id = item.get("aweme_id")
-            if not aweme_id:
-                self._progress_advance_item("failed", "missing_aweme_id")
-                return {"status": "failed", "aweme_id": None}
 
-            if not await self._should_download(str(aweme_id)):
-                saved = await self._collect_comments_for_existing_aweme(
-                    item,
-                    author_name,
-                    mode="mix",
-                    collection_dir=collection_dir,
-                )
-                status = "success" if saved else "skipped"
-                self._progress_advance_item(status, str(aweme_id))
+            def _finish(status: str) -> Dict[str, Any]:
+                if report:
+                    self._progress_advance_item(status, str(aweme_id or "unknown"))
                 return {"status": status, "aweme_id": aweme_id}
 
-            success = await self._download_aweme_assets(
-                item, author_name, mode="mix", collection_dir=collection_dir
-            )
-            status = "success" if success else "failed"
-            self._progress_advance_item(status, str(aweme_id))
-            return {"status": status, "aweme_id": aweme_id}
+            if not aweme_id:
+                return _finish("failed")
+
+            try:
+                if not await self._should_download(str(aweme_id)):
+                    saved = await self._collect_comments_for_existing_aweme(
+                        item,
+                        author_name,
+                        mode="mix",
+                        collection_dir=collection_dir,
+                    )
+                    return _finish("success" if saved else "skipped")
+
+                outcome: Dict[str, str] = {}
+                success = await self._download_aweme_assets(
+                    item, author_name, mode="mix", collection_dir=collection_dir,
+                    outcome=outcome,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Mix aweme %s failed with an unexpected error", aweme_id)
+                return _finish("failed")
+            if success:
+                return _finish("success")
+            # 付费/会员内容：CENC 密文解不开，属预期内下不来（与 UserDownloader 同口径）
+            if outcome.get("status") == "paid":
+                return _finish("paid")
+            return _finish("failed")
 
         download_results = await self.queue_manager.download_batch(_process_aweme, aweme_list)
-        for entry in download_results:
-            status = entry.get("status") if isinstance(entry, dict) else None
+        statuses = [entry_status(entry) for entry in download_results]
+        # 与 UserDownloader 同一条自愈路径：源站的短时封禁不该变成本次的永久失败。
+        await self._recover_failed_items(
+            aweme_list, statuses, partial(_process_aweme, report=False)
+        )
+        for status in statuses:
             if status == "success":
                 result.success += 1
             elif status == "skipped":
                 result.skipped += 1
+            elif status == "paid":
+                result.paid += 1
             else:
                 result.failed += 1
         return result

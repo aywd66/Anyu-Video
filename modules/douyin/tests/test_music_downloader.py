@@ -142,7 +142,9 @@ async def test_music_downloader_falls_back_to_first_aweme_when_direct_audio_miss
     async def _fake_should_download(self, _aweme_id: str):
         return True
 
-    async def _fake_download_aweme_assets(self, aweme_data, author_name, mode=None):
+    async def _fake_download_aweme_assets(
+        self, aweme_data, author_name, mode=None, outcome=None
+    ):
         downloaded_awemes.append((aweme_data["aweme_id"], author_name, mode))
         return True
 

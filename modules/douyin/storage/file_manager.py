@@ -2,8 +2,9 @@ import asyncio
 import os
 import re
 import time
+from collections import deque
 from pathlib import Path
-from typing import Callable, Dict, Optional, Union
+from typing import Callable, Deque, Dict, Optional, Union
 
 import aiofiles
 import aiohttp
@@ -47,6 +48,128 @@ _DOWNLOAD_PROGRESS_INTERVAL_S = 2.0
 
 # 模块级时钟别名，便于测试注入假时钟（真实 sleep 会让用例慢到不可接受）。
 _monotonic = time.monotonic
+
+# ---------------------------------------------------------------- 失败熔断
+# 源站被短时封禁时，全体 worker 一起静默冷却再继续，而不是把冷却期里的
+# 每条作品都记成「失败」。
+#
+# 现场（2026-10-01 job bf863446014，8113 条的主页任务）：12:15:00–12:16:42
+# 这 100 秒里连续失败 167 条 —— 视频候选链全灭（`All 3 video url candidate(s)
+# failed`）与图集首图失败（`Failed downloading image 1`）**同时**发生，之后
+# 完全恢复，失败计数停在 167 不动。事后用同一份 cookie 重跑这 167 条，全部
+# 成功。这是 CDN/WAF 对客户端的短时封禁，跟作品本身无关。
+#
+# 旧行为下这 100 秒被白白烧成 167 条「失败」：候选轮扫的退避（1+2+5s）远短
+# 于封禁窗口，而失败一旦落定就不再重来。
+#
+# 记账在**条目**粒度上做（core.downloader_base 在传输失败点调
+# ``record_failure``），不在 ``download_file`` 调用粒度上做 —— 一次候选轮扫
+# 最多能产生 4 候选 × 4 轮的失败，按调用记账的话一条死链作品自己就能凑满阈值。
+# 判据用「滚动窗口内的失败条数」而不是「连续失败次数」：并发 16 路时好节点
+# 与坏节点会交织出零星成功，连续计数永远够不到阈值。
+_BURST_WINDOW_S = 30.0
+_BURST_FAILURE_THRESHOLD = 10
+_BURST_BASE_COOLDOWN_S = 20.0
+_BURST_MAX_COOLDOWN_S = 300.0
+
+
+class FailureBurstBreaker:
+    """跨 worker 共享的失败熔断闸门。
+
+    由 ``core.downloader_base.BaseDownloader`` 在**条目**粒度上喂：一条作品的
+    传输失败算一次 ``record_failure``，一条作品完好落盘算一次
+    ``record_success``；``FileManager.download_file`` 只负责 ``wait`` 放行。
+
+    语义：``window_s`` 内累计失败达到 ``threshold`` 条 → 全体 worker 停手
+    ``base_cooldown_s``，之后每再撞一次翻倍（封顶 ``max_cooldown_s``）。从
+    最后一次失败起整整一个窗口都安静，才把冷却时长收敛回基准。
+
+    ``wait`` / ``record_failure`` / ``record_success`` 都可能被多个 worker
+    并发调用，判定与推进都在同步代码里完成（没有 await 夹在中间），因此不需要
+    锁 —— 事件循环是单线程的。
+    """
+
+    def __init__(
+        self,
+        *,
+        window_s: float = _BURST_WINDOW_S,
+        threshold: int = _BURST_FAILURE_THRESHOLD,
+        base_cooldown_s: float = _BURST_BASE_COOLDOWN_S,
+        max_cooldown_s: float = _BURST_MAX_COOLDOWN_S,
+        clock=None,
+    ):
+        self._window_s = max(0.0, float(window_s))
+        self._threshold = max(1, int(threshold))
+        self._base_cooldown_s = max(0.0, float(base_cooldown_s))
+        self._max_cooldown_s = max(self._base_cooldown_s, float(max_cooldown_s))
+        self._clock = clock or _monotonic
+        self._failures: Deque[float] = deque()
+        self._last_failure_at = 0.0
+        self._release_at = 0.0
+        self._escalation = 0
+        self._announced = False
+
+    @property
+    def cooldown_remaining(self) -> float:
+        return max(0.0, self._release_at - self._clock())
+
+    def _prune(self, now: float) -> None:
+        cutoff = now - self._window_s
+        while self._failures and self._failures[0] < cutoff:
+            self._failures.popleft()
+
+    def record_failure(self) -> None:
+        now = self._clock()
+        self._prune(now)
+        self._failures.append(now)
+        self._last_failure_at = now
+        if len(self._failures) < self._threshold:
+            return
+        self._failures.clear()
+        if self.cooldown_remaining > 0:
+            # 已经在冷却里：这一批失败本来就是冷却期间从在途连接冒出来的，
+            # 不该让冷却时长再翻一倍。
+            return
+        if self._base_cooldown_s <= 0:
+            return
+        cooldown = min(
+            self._base_cooldown_s * (2 ** self._escalation), self._max_cooldown_s
+        )
+        self._escalation += 1
+        self._release_at = now + cooldown
+        self._announced = False
+        logger.warning(
+            "Download failure burst: %d failures within %.0fs, pausing all workers "
+            "for %.0fs (#%d). This is normally a short server-side throttle, "
+            "not broken content; downloads resume automatically after the pause.",
+            self._threshold,
+            self._window_s,
+            cooldown,
+            self._escalation,
+        )
+
+    def record_success(self) -> None:
+        now = self._clock()
+        self._prune(now)
+        if self._failures:
+            self._failures.clear()
+        # 只有「从最后一次失败起安静了整整一个窗口」才收敛冷却时长；否则零星
+        # 成功会把升级过的冷却一次次拉回基准，封禁再来时又要从 20s 重新爬。
+        if now - self._last_failure_at >= self._window_s:
+            self._escalation = 0
+
+    async def wait(self) -> None:
+        """冷却期内停在这里；冷却结束后立刻放行。"""
+        while True:
+            remaining = self.cooldown_remaining
+            if remaining <= 0:
+                return
+            if not self._announced:
+                self._announced = True
+                logger.warning(
+                    "Download burst cooldown active, resuming in %.0fs", remaining
+                )
+            await asyncio.sleep(min(remaining, 1.0))
 
 
 def _build_httpx_client(proxy: Optional[str]) -> httpx.AsyncClient:
@@ -138,6 +261,9 @@ class FileManager:
     def __init__(self, base_path: str = "./Downloaded"):
         self.base_path = Path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)
+        # 一个 FileManager 实例 = 一次下载任务 = 一份熔断状态，被该任务的
+        # 全部 worker 共享（见 :class:`FailureBurstBreaker`）。
+        self.breaker = FailureBurstBreaker()
 
     def get_author_dir(
         self,
@@ -308,6 +434,39 @@ class FileManager:
         return _SEC_UID_ILLEGAL_RE.sub("_", sec_uid).strip("._- ")
 
     async def download_file(
+        self,
+        url: str,
+        save_path: Path,
+        session: aiohttp.ClientSession = None,
+        headers: Optional[Dict[str, str]] = None,
+        proxy: Optional[str] = None,
+        *,
+        prefer_response_content_type: bool = False,
+        return_saved_path: bool = False,
+        on_progress: Optional[Callable[[int, int], None]] = None,
+    ) -> Union[bool, Path]:
+        """下载单个文件；冷却期内先停在熔断闸门上。
+
+        ⚠️ 这里**只**消费熔断状态（``wait``），不记账。记账在**条目**粒度上做
+        （:meth:`core.downloader_base.BaseDownloader._note_transport_failure`）：
+        一次候选轮扫里同一条作品最多能产生 4 候选 × 4 轮的 16 次失败，按调用
+        记账的话**一条死链作品自己就能凑满阈值**，把健康节点也一起刹停。
+        条目粒度才是「源站在拦我」的真实信号 —— 现场那 100 秒里失败的正是
+        167 **条**作品。
+        """
+        await self.breaker.wait()
+        return await self._download_file_impl(
+            url,
+            save_path,
+            session,
+            headers,
+            proxy,
+            prefer_response_content_type=prefer_response_content_type,
+            return_saved_path=return_saved_path,
+            on_progress=on_progress,
+        )
+
+    async def _download_file_impl(
         self,
         url: str,
         save_path: Path,

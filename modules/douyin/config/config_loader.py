@@ -351,8 +351,13 @@ class ConfigLoader:
                     raise ValueError
                 self.config["thread"] = thread_val
             except (TypeError, ValueError):
-                logger.warning("Invalid thread value: %s, using default 5", thread)
-                self.config["thread"] = 5
+                # 回落到 DEFAULT_CONFIG 而不是写死字面量：默认并发改过一次
+                # （5 → 16），两处各写一个字面量是最容易漂的地方。
+                fallback_thread = int(DEFAULT_CONFIG.get("thread", 16) or 16)
+                logger.warning(
+                    "Invalid thread value: %s, using default %s", thread, fallback_thread
+                )
+                self.config["thread"] = fallback_thread
 
         retry_times = self.config.get("retry_times")
         if retry_times is not None:
@@ -362,8 +367,13 @@ class ConfigLoader:
                     raise ValueError
                 self.config["retry_times"] = retry_val
             except (TypeError, ValueError):
-                logger.warning("Invalid retry_times value: %s, using default 3", retry_times)
-                self.config["retry_times"] = 3
+                fallback_retry = int(DEFAULT_CONFIG.get("retry_times", 3) or 3)
+                logger.warning(
+                    "Invalid retry_times value: %s, using default %s",
+                    retry_times,
+                    fallback_retry,
+                )
+                self.config["retry_times"] = fallback_retry
 
         for field in ("start_time", "end_time"):
             value = self.config.get(field)

@@ -9,12 +9,19 @@
 /* ---------- 顶栏（原 .sidebar，变形复用） ---------- */
 .sidebar {
   width: 100%;
-  height: var(--bb-topbar-h);
+  /* ⚠️ 高度必须 auto：顶栏元素总宽随功能增长，固定高度 + 不折行 +
+   * 渐进收缩的下场就是「菜单只显示半个词」（v7 分层隐藏也救不过来，
+   * 每加一个元素就得重调所有断点 —— 环境灯一上，1440 档立刻挤爆）。
+   * 现在的规则：所有区块 flex:none 永不压缩，放不下就整块折到第二行。
+   * 不截断、不隐藏任何入口，且无需按视口维护断点表。 */
+  min-height: var(--bb-topbar-h);
+  height: auto;
   display: flex;
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 14px;
-  padding: 0 20px;
+  gap: 8px 14px;
+  padding: 6px 20px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
   box-shadow: var(--bb-shadow-bar);
@@ -155,6 +162,11 @@
   min-width: 0;
 }
 
+/* 顶栏里的侧卡（账号卡/数据卡）：压缩到与导航药丸同高，
+ * 否则 44px 的卡会把所在行撑高，整条顶栏跟着变高 */
+.sidebar .side-card { padding: 3px 10px; gap: 8px; border: 1px solid var(--line); }
+.sidebar .side-card__icon { display: none; }
+
 .side-card__title {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -197,21 +209,17 @@
 
 .side-card .btn--ghost { padding: 4px 10px; font-size: 11.5px; }
 
-/* 菜单（顶栏中部导航）：空间不足时内部横向滚动，不把动作区挤出视口 */
+/* 菜单（顶栏中部导航）：放不下整块折行，绝不内部滚动截断（截半个词最误导） */
 .nav {
   display: flex;
   flex-direction: row;
-  align-items: stretch;
-  flex-wrap: nowrap;
-  gap: 2px;
-  height: var(--bb-topbar-h);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 2px;
   margin-left: 4px;
   flex: 1 1 auto;
   min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
 }
-.nav::-webkit-scrollbar { display: none; }
 
 .nav__item {
   position: relative;
@@ -387,6 +395,23 @@
   background: var(--acc, var(--bb-primary));
 }
 
+/* 面包屑里可点的祖先节点（如「启动台」）——
+   面包屑不只是文字装饰，它同时是回到上级页面的路径；可点的部分要有
+   明确的落点，但视觉上不能抢过当前页名（所以用下划线而不是加粗/变色块）。 */
+.crumb__link {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color .15s ease, color .15s ease;
+}
+
+.crumb__link:hover,
+.crumb__link:focus-visible {
+  color: var(--brand-ink, var(--bb-primary));
+  border-bottom-color: var(--line-mid, currentColor);
+  outline: none;
+}
+
 /* 页标题：标题与说明上下堆叠（套件规范）；行内布局用 .page-head__row */
 .page-head {
   margin: var(--sp-4) 0 var(--sp-5);
@@ -420,42 +445,17 @@
 .page-head--compact .page-title { font-size: 22px; }
 .page-head--compact { margin-bottom: var(--sp-5); }
 
-/* ---------- 响应式 ---------- */
-@media (max-width: 1500px) {
-  /* 账号卡让位给导航：窄桌面隐藏（账号状态在平台工作台页头仍可见） */
-  .side-section:has(#account-card) { display: none; }
-}
+/* ---------- 响应式 ----------
+ * 顶栏已改为「整块折行」模型（见 .sidebar 注释）：放不下就换行，
+ * 不再按视口隐藏区块 —— 那套断点表随元素增长必然失守（v7 → 环境灯两次翻车）。
+ * 这里只保留与折行无关的规则。 */
 
-/* ---------- 顶栏硬收纳（v7）：放弃渐进收缩，按用户实际视口分层 ----------
- * 根因复盘：flex 收缩会把按钮内容溢出绘制到相邻区块（截断真因），
- * 所以本层不再允许任何区块被压缩——空间不足直接隐藏整块。
- * ≥1500px：全量；1366-1500：隐账号卡；1280-1366：隐动作区+数据卡，平台钮图标化；
- * 1150-1280：再隐藏菜单文字改滚动；≤900px：回移动折叠布局（全部恢复，折行显示） */
-@media (max-width: 1500px) {
-  .side-section--account { display: none; }
-}
-
-@media (max-width: 1366px) {
-  .side-actions { display: none; }
-  .side-section--mode { display: none; }
-  .env-light__label { display: none; }  /* 窄屏只留灯，详情点开看 */
-  .env-light { padding: 0 7px; }
-}
-
-@media (max-width: 1280px) {
-  .platform-btn__label { display: none; }
-  .platform-btn { padding: 0 10px; flex: none; }
-  .nav { overflow-x: auto; }
-  .nav__item { flex: none; }
-}
-
-/* 平台区永不收缩（内容多大占多大，杜绝溢出绘制） */
+/* 各区块永不收缩（内容多大占多大，杜绝溢出绘制） */
 .side-section { flex: none; }
 .side-section--menu { flex: 1 1 auto; min-width: 0; }
 
 @media (max-width: 1180px) {
   :root { --content-max: 100%; }
-  .side-actions .btn span { display: none; }
 }
 
 @media (max-width: 900px) {
@@ -493,11 +493,6 @@
 
   .side-actions { margin-left: 0; display: flex; }
   .side-footer { display: none; }
-  /* 移动式折叠：收纳的区块恢复显示（布局折行不挤压） */
-  .side-section--account,
-  .side-section--mode { display: flex; }
-  .side-actions { display: flex; }
-  .platform-btn__label { display: inline; }
   .platform-btn__dot { display: none; }
 
   .content { padding: var(--sp-4); }

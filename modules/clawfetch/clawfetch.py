@@ -43,13 +43,31 @@ from collections import deque
 from datetime import datetime
 from urllib.parse import unquote, urlparse
 
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 PROGRAM = "clawfetch"
 LEDGER_NAME = "download_ledger.jsonl"
 TRASH_DIR = ".clawfetch_trash"
 CHUNK = 64 * 1024
 MULTI_MIN = 16 * 1024 * 1024  # 超过此大小且服务器支持 Range 时启用多线程分段
 STALL_ABORT_SEC = float(os.environ.get("CLAWFETCH_STALL_ABORT", "120"))  # 尝试内全局无进度多久后提前中止
+# 自适应并发的两个判据窗口。取名是因为它们是**实测结论**而不是拍脑袋的常数：
+# 2026-09-26 一次真实故障（818.91MB 走 trycloudflare 临时隧道）里，8 个连接
+# 有 3 个整整 30 秒一个字节都没收到，而同一次运行里有 72 次 HTTP 502。
+STARVE_SEC = float(os.environ.get("CLAWFETCH_STARVE_SEC", "30"))       # 新并发布局给多久来自证；也是"零进度"的判定时长
+SCALE_WINDOW_SEC = float(os.environ.get("CLAWFETCH_SCALE_WINDOW", "15"))  # 吞吐采样窗口
+# 预检探测的超时上限。探测只是"这链接活着吗"，不该跟着 --timeout 一起放大：
+# probe() 最多试 2 次，所以 -t 60 会让**还没开始下载**就先等 2 分钟。
+# （2026-09-26 实测：-t 60 时探测阶段耗掉约 100 秒。批量模式早有 10s 上限，
+#   单链接模式漏了，这里补齐。）
+PROBE_TIMEOUT_MAX = float(os.environ.get("CLAWFETCH_PROBE_TIMEOUT", "10"))
+
+# 并发上限。与 plan_segments 里的 32 是同一个数，提到这里是为了让"升档阶梯"
+# 和"分段规划"用同一个上限，不再各写一个字面量。
+MAX_CONN = int(os.environ.get("CLAWFETCH_MAX_CONN", "32"))
+# 5xx 熔断阈值：单次尝试内 HTTP 5xx 累计到这个数，就判定"源站扛不住这么多连接"，
+# 当场锁死为单连接并不再升档。取值依据：健康源站偶发 5xx 是零星的，
+# 而 2026-09-27 那次真实故障在 83 秒里刷了 122 次（32 连接），中间毫无过渡。
+HTTP5XX_TRIP = int(os.environ.get("CLAWFETCH_5XX_TRIP", "5"))
 
 # ---- 退出码 ----
 EXIT_OK = 0
@@ -684,7 +702,10 @@ def run_attempts(args, url, target, part, total_hint, run_id, ledger, is_tty, ou
         if os.path.exists(part) and os.path.exists(_mp):
             _pm = _read_part_meta(_mp)
             if _pm and isinstance(_pm.get("segments"), list):
-                # 多线程分段格式的旧进度与单线程模式不兼容(预分配空洞文件),必须隔离重下
+                # 多线程分段格式的旧进度与单线程模式不兼容,必须隔离重下。
+                # (多线程路径是 open("wb")+truncate(total) 预分配到全长的;实测在 NTFS 上
+                #  未标稀疏属性的预分配会**真占满**磁盘 —— 一个只下到 2MB 的 818.91MB
+                #  .part,在资源管理器里就是 818.91MB。别被"空洞文件"这个说法骗了。)
                 move_to_trash([part, _mp], outdir)
                 offset = 0
                 cwrite("提示:检测到多线程分段格式的旧进度,与单线程模式不兼容,已隔离并重新下载")
@@ -921,9 +942,55 @@ class MultiUnsupported(Exception):
     """服务器不支持多线程分段(无 Range/206),需回退单线程。"""
 
 
+def concurrency_starved(seg_done):
+    """并发把源站喂哑了吗？判据：**部分**分段一个字节都没收到，而另一部分在动。
+
+    返回 `(是否饿死, 零进度分段数)`。
+
+    为什么要求"有人吃到了"：全都零字节 = 源站整体不通，那是 stalled/错误
+    路径该管的事，不该怪到并发数头上（降了连接也一样不通）。
+    为什么这是"实测"而不是"猜服务器串行"：真实串行源站的形态就是这个 ——
+    2026-09-26 那次 818.91MB 的 trycloudflare 隧道，8 连接里 3 个整整
+    30 秒零字节，而剩下的在滴。
+    """
+    try:
+        n = len(seg_done)
+        fed = sum(1 for d in seg_done if d > 0)
+        return (0 < fed < n, n - fed)
+    except Exception:
+        return (False, 0)
+
+
+def retry_storm(win_retries, n_seg):
+    """窗口内重试是否密集到"源站被压垮"的程度（5xx/超时刷屏）。
+
+    阈值取 `max(2, N/2)`：单次重试是网络抖动，半个窗口的段都在重试才是过载。
+    """
+    try:
+        return int(win_retries) >= max(2, int(n_seg) // 2)
+    except Exception:
+        return False
+
+
+def http5xx_tripped(n_5xx, n_seg, already_weak=False, trip=HTTP5XX_TRIP):
+    """5xx 熔断判据（纯函数，便于离线把数字钉住）。
+
+    与 `retry_storm` 分开的**理由**：重试风暴要等观测窗口、而且被降档分支的
+    `not errors` 前置条件挡着 —— 502 刷屏的时候恰恰降不了档。5xx 是比"重试多"
+    更硬的证据（超时可能是自己网络抖，502 是源站明确拒服务），所以它单独成一条
+    判据：**不看窗口、不看 errors，累计到阈值当场熔断**。
+
+    返回 True 时调用方应把并发锁到 1，并把 `weak_source` 置位（本次运行内不再升档）。
+    """
+    try:
+        return bool((not already_weak) and int(n_seg) > 1 and int(n_5xx) >= int(trip))
+    except Exception:
+        return False
+
+
 def plan_segments(total, n):
     """把 [0,total) 均分为 n 段(每段至少 1MB,自动减段)。返回 [[start,end,done=0]]。"""
-    n = max(1, min(int(n or 1), 32))
+    n = max(1, min(int(n or 1), MAX_CONN))
     while n > 1 and total // n < 1024 * 1024:
         n -= 1
     seg_len = total // n
@@ -952,9 +1019,47 @@ def _write_part_meta_v2(meta_path, url, segments, total):
             pass
 
 
+def coalesce_ranges(segs, n):
+    """把碎段合并到至多 n 段 —— **代价是中间被夹着的已完成区间会被重下**。
+
+    为什么必须有它：一个连接只能顺序读**一段连续区间**。洞太碎的时候
+    （现实例子：E:\\zl 那份 23 段的断点，洞被已下完的区间切成 20 来片），
+    `_rescale_segments` 只能切出一片洞一段，于是"降到 1 个连接"永远做不到 ——
+    降档会变成死循环：每轮都算出同样多的段，连接数一个都降不下来。
+
+    宁可重下那点被夹住的字节，也要把连接数真正降下来：源站扛不住并发时，
+    重下几 MB 远比继续 502 风暴划算。
+
+    返回 `(新段列表, 被重下的字节数估计)`。
+    """
+    try:
+        n = max(1, int(n))
+        if len(segs) <= n:
+            return segs, 0
+        groups = []
+        for i in range(n):
+            a = (len(segs) * i) // n
+            b = (len(segs) * (i + 1)) // n
+            groups.append(segs[a:b])
+        out, wasted = [], 0
+        for g in groups:
+            if not g:
+                continue
+            start, end = g[0]["start"], g[-1]["end"]
+            covered = sum(x["end"] - x["start"] + 1 for x in g)
+            wasted += (end - start + 1) - covered
+            out.append({"start": start, "end": end, "done": 0})
+        return out, max(0, wasted)
+    except Exception:
+        return segs, 0
+
+
 def _rescale_segments(segments, new_n):
     """按已完成的分段状态重切未完成区间(洞):
-    已完成字节原样保留(绝对偏移不变),未完成洞合并后均分为 new_n 段。"""
+    已完成字节原样保留(绝对偏移不变),未完成洞合并后均分为 new_n 段。
+
+    洞比 new_n 还碎时走 `coalesce_ranges` 兜底（见那里的说明）。
+    """
     holes = []
     for s in segments:
         seg_len = s["end"] - s["start"] + 1
@@ -969,7 +1074,7 @@ def _rescale_segments(segments, new_n):
     if not merged:
         return []  # 全部完成
     total_hole = sum(e - s + 1 for s, e in merged)
-    n = max(1, min(int(new_n), 32))
+    n = max(1, min(int(new_n), MAX_CONN))
     while n > 1 and total_hole // n < 512 * 1024:
         n -= 1
     out = []
@@ -987,11 +1092,25 @@ def _rescale_segments(segments, new_n):
                 hi += 1
             else:
                 merged[hi] = (s, e)
+    if len(out) > n:
+        out, _ = coalesce_ranges(out, n)
     return out
 
 
-def _seg_retry(idx, fe, r, retries, cancel, errors):
-    """分段级错误处理:可重试且未耗尽 → 退避后继续(True);否则记录并取消(False)。"""
+def _seg_retry(idx, fe, r, retries, cancel, errors, stats=None):
+    """分段级错误处理:可重试且未耗尽 → 退避后继续(True);否则记录并取消(False)。
+
+    `stats` 是给自适应并发用的**故障计数器**：分段重试（尤其是超时、5xx）
+    本身就是"源站扛不住这么多连接"的证据。旧代码只看 `errors`（重试耗尽的
+    终局错误），于是 502 刷了 72 次也拦不住扩容 —— 这是本轮真实故障的直接原因。
+    """
+    if stats is not None:
+        try:
+            stats["retries"] = int(stats.get("retries") or 0) + 1
+            if getattr(fe, "http_status", None) and fe.http_status >= 500:
+                stats["http5xx"] = int(stats.get("http5xx") or 0) + 1
+        except Exception:
+            pass
     if fe.retryable and r < retries - 1 and not cancel.is_set():
         cwrite("分段 %d 第 %d 次失败:%s(%.1f 秒后本段自动重试)"
                % (idx, r + 1, fe, backoff_delay(1.0, r + 1)))
@@ -1003,7 +1122,7 @@ def _seg_retry(idx, fe, r, retries, cancel, errors):
 
 
 def _seg_worker(idx, seg, total, fh, wlock, cancel, prog, args, request_url,
-                meta_path, segments, errors):
+                meta_path, segments, errors, stats=None):
     """单段下载线程:从 seg['start']+seg['done'] 续传到 seg['end']。"""
     seg_len = seg["end"] - seg["start"] + 1
     retries = max(args.retries, 0) + 1
@@ -1084,16 +1203,16 @@ def _seg_worker(idx, seg, total, fh, wlock, cancel, prog, args, request_url,
             cancel.set()
             return
         except FetchError as fe:
-            if not _seg_retry(idx, fe, r, retries, cancel, errors):
+            if not _seg_retry(idx, fe, r, retries, cancel, errors, stats):
                 return
         except urllib.error.HTTPError as he:
             if he.code == 416 and seg["done"] >= seg_len:
                 _write_part_meta_v2(meta_path, request_url, segments, total)
                 return  # 本就收齐(防御):区间无效但无需再拉
-            if not _seg_retry(idx, normalize_error(he), r, retries, cancel, errors):
+            if not _seg_retry(idx, normalize_error(he), r, retries, cancel, errors, stats):
                 return
         except Exception as e:
-            if not _seg_retry(idx, normalize_error(e), r, retries, cancel, errors):
+            if not _seg_retry(idx, normalize_error(e), r, retries, cancel, errors, stats):
                 return
     if seg["done"] < seg_len and not cancel.is_set():
         errors.append(FetchError(EXIT_TIMEOUT, "分段 %d 重试耗尽" % idx,
@@ -1110,6 +1229,16 @@ def download_multi(args, url, target, part, total, run_id, ledger, is_tty, outdi
     attempts = max(args.retries, 0) + 1
     attempt = 0
     stalled_attempts = 0
+    auto_mode = (args.segments == 0)
+    # 本文件内"当前认为合适的并发"。auto 下会随实测升降，并在重试时沿用 ——
+    # 否则第 2 次尝试又从 8 连接开局，把刚刚花 30 秒学到的教训重学一遍。
+    preferred_n = 8
+    # 本次运行里"已经确认这个源站扛不住并发"。
+    # 为什么需要它、以及为什么不能只靠 preferred_n：降档只影响**下一轮**的起点，
+    # 而升档阶梯是每轮重新算的。2026-09-27 真实故障里，前几轮已经降到了 1 连接，
+    # 第 4 轮却又一路升到 32 连接，83 秒刷出 123 次分段重试（122 次 HTTP 5xx）。
+    # 一旦置位：后续每一轮都不再升档，只按学到的并发数跑。
+    weak_source = False
     while attempt < attempts:
         attempt += 1
         t0 = time.monotonic()
@@ -1131,6 +1260,22 @@ def download_multi(args, url, target, part, total, run_id, ledger, is_tty, outdi
                     meta_ok = False
                     break
                 prev_end = s["end"]
+            # 显式 --segments N（或 auto 在本文件内学到的合适并发）必须压过
+            # 盘上的旧分段布局。否则「照提示加 --segments 1 用单连接重跑」在
+            # 续传时是句空话 —— 盘上那份 23 段的 meta 会照旧开 23 个连接，
+            # 用户会以为提示骗人。（2026-09-26 真实故障就是这样：失败后重跑
+            # 仍以 23 连接开局。）只收不放：比目标多的段才重切。
+            want_n = args.segments if args.segments > 0 else preferred_n
+            if meta_ok and len(segments) > want_n:
+                old_n = len(segments)
+                new_segs = _rescale_segments(segments, want_n)
+                if new_segs:
+                    segments = new_segs
+                    _write_part_meta_v2(meta_path, request_url, segments, total)
+                    cwrite("[模式] 重切未完成区间：%d 段 → %d 段%s"
+                           % (old_n, len(segments),
+                              "（--segments %d）" % args.segments if args.segments > 0
+                              else "（auto：并发多为无益）"))
         else:
             meta_ok = False
         fh = None
@@ -1144,7 +1289,8 @@ def download_multi(args, url, target, part, total, run_id, ledger, is_tty, outdi
                     move_to_trash([part, meta_path], outdir)
                     cwrite("提示:旧进度与当前文件不匹配(或无有效分段信息),已隔离并重新下载")
                 segments = [{"start": s[0], "end": s[1], "done": 0}
-                            for s in plan_segments(total, args.segments if args.segments > 0 else 8)]
+                            for s in plan_segments(
+                                total, args.segments if args.segments > 0 else preferred_n)]
                 fh = open(part, "wb")
                 fh.truncate(total)
                 fh.close()
@@ -1154,32 +1300,84 @@ def download_multi(args, url, target, part, total, run_id, ledger, is_tty, outdi
             cwrite("[尝试 %d/%d] 多线程分段下载:%d 个连接%s" % (
                 attempt, attempts, len(segments),
                 ",续传自 %s" % human_bytes(resumed) if resumed else ""))
+            if weak_source:
+                cwrite("[模式] 已判定源站扛不住并发：本轮沿用 %d 个连接，不再尝试升档"
+                       % len(segments))
             prog = Progress(base=resumed, total=total, is_tty=is_tty,
                             quiet=args.quiet, tag="%d 线程" % len(segments))
             wlock = threading.Lock()
             cancel = threading.Event()
             errors = []
             threads = []
+            seg_stats = {"retries": 0, "http5xx": 0}
             for i, seg in enumerate(segments):
                 if seg["done"] > seg["end"] - seg["start"] + 1:
                     seg["done"] = seg["end"] - seg["start"] + 1  # 防御:done 超界
                 t = threading.Thread(
                     target=_seg_worker,
                     args=(i, seg, total, fh, wlock, cancel, prog, args,
-                          request_url, meta_path, segments, errors),
+                          request_url, meta_path, segments, errors, seg_stats),
                     daemon=True)
                 threads.append(t)
                 t.start()
-            starve_deadline = time.monotonic() + 30
-            bailed = False
+            starve_deadline = time.monotonic() + STARVE_SEC
             auto = (args.segments == 0)
-            ramp = [8, 16, 32] if auto else None
+            # 升档阶梯**从当前连接数出发算**，不再写死绝对值。
+            # 旧写法 ramp=[8,16,32] + 每轮 scale_idx 归零：假设上一轮已降档到 4
+            # 连接，本轮起点是 4，可第一次"升档"会直接跳到 ramp[1]=16 —— 等于把
+            # 上一轮降档学到的结论当成没发生。weak_source 置位后干脆不给阶梯。
+            ramp = None
+            if auto and not weak_source:
+                ladder, n = [len(segments)], len(segments)
+                while n < MAX_CONN and len(ladder) <= 3:
+                    n = min(n * 2, MAX_CONN)
+                    ladder.append(n)
+                ramp = ladder if len(ladder) > 1 else None
             scale_idx = 0
-            agg_speeds = []
+            prev_clean = 0.0         # 上一"干净窗口"的聚合吞吐(用于判断扩容有没有收益)
+            stopped_up = False        # 已判定"再增连接不会更快"→ 不再上行
+            layout_base = resumed     # 当前并发布局创建时的进度(用于判"完全空转")
             last_window = (time.monotonic(), resumed)
+            last_retry_total = 0
             last_progress_ts = time.monotonic()
             last_progress_val = prog.cur() if prog else resumed
             stalled = False
+
+            def _swap_workers(new_segs):
+                """把未完成的洞重切成另一套分段并重启工作线程。**进度全部保留**。
+
+                旧代码在"串行源"这条路径上是 move_to_trash + 回退单线程 ——
+                也就是说它靠**把已下的几十 MB 丢掉**来换单线程。
+                这里改成原地重切：已完成字节绝对偏移不变，只重排"洞"。
+                """
+                nonlocal segments, wlock, cancel, prog, errors, threads
+                nonlocal starve_deadline, last_window, last_retry_total, layout_base
+                cancel.set()
+                for t in threads:
+                    t.join()
+                cur = prog.cur() if prog else 0
+                segments = new_segs
+                _write_part_meta_v2(meta_path, request_url, segments, total)
+                wlock = threading.Lock()
+                cancel = threading.Event()
+                prog = Progress(base=cur, total=total, is_tty=is_tty,
+                                quiet=args.quiet, tag="%d 线程" % len(segments))
+                errors = []
+                threads = []
+                for i, sg in enumerate(segments):
+                    t = threading.Thread(
+                        target=_seg_worker,
+                        args=(i, sg, total, fh, wlock, cancel, prog, args,
+                              request_url, meta_path, segments, errors, seg_stats),
+                        daemon=True)
+                    threads.append(t)
+                    t.start()
+                starve_deadline = time.monotonic() + STARVE_SEC
+                layout_base = cur
+                last_window = (time.monotonic(), cur)
+                last_retry_total = seg_stats["retries"]
+                return cur
+
             try:
                 while True:
                     alive = [t for t in threads if t.is_alive()]
@@ -1196,56 +1394,105 @@ def download_multi(args, url, target, part, total, run_id, ledger, is_tty, outdi
                         _join_all(threads, 10.0)
                         stalled = True
                         break
-                    if (attempt == 1 and resumed == 0 and not errors
-                            and scale_idx == 0
-                            and now > starve_deadline
-                            and any(s["done"] == 0 for s in segments)
-                            and max(s["done"] for s in segments) > 0):
-                        # 服务器串行响应:多线程无益,回退单线程
-                        cancel.set()
-                        _join_all(threads, 10.0)
-                        bailed = True
-                        break
-                    if (auto and scale_idx < len(ramp) - 1 and not errors
-                            and now - last_window[0] >= 15):
+                    # ── (1) 降档：并发把源站打哑了 ──────────────────────────
+                    # 判据全部是**实测**，不是"猜服务器串行"：
+                    #   · 饿死：新布局给了 STARVE_SEC 之后，部分分段一个字节都没
+                    #     收到，而另一部分在动 —— 不是源站死，是它喂不过来这么多嘴。
+                    #   · 空转：整体一点进度都没有，还在不停重试 —— 连接开太多，
+                    #     每一路都拿不到可用带宽（本轮 attempt 2 就是这个样子：
+                    #     8 连接跑 42 秒、零增长、HTTP 500）。
+                    # 两种情况都砍半，直到单连接；全程保留进度。
+                    #
+                    # 刻意**不**用"重试多 → 降档"这一条单判据：健康快源遇到整段
+                    # 网络闪断也会刷重试，那不是源站的错，降它的连接只会白白变慢
+                    # （2026-09-11 那次 1.68GB 的实测就是靠分段级重试自愈的）。
+                    # ── (0) 熔断：HTTP 5xx 风暴 ─────────────────────────────
+                    # 5xx 密集是"源站扛不住这么多连接"最硬的证据，而且它**不需要**
+                    # 等 STARVE_SEC 判据窗口、也**不该**被 errors 挡住 —— 下面那条
+                    # 降档分支的前置条件是 not errors，于是 502 刷屏的时候反而一整轮
+                    # 都降不了档，只能看着它撞到重试耗尽（2026-09-27 真实故障形态）。
+                    # 一旦命中：当场降到单连接，并把 weak_source 记到本次运行结束。
+                    if http5xx_tripped(seg_stats.get("http5xx"), len(segments), weak_source):
+                        cwrite("[熔断] 本轮已出现 %d 次 HTTP 5xx —— 源站扛不住并发，"
+                               "降到 1 个连接（进度保留，本次运行内不再升档）"
+                               % int(seg_stats["http5xx"]))
+                        weak_source = True
+                        stopped_up = True
+                        new_segs = _rescale_segments(segments, 1)
+                        if new_segs and len(new_segs) < len(segments):
+                            preferred_n = 1
+                            _swap_workers(new_segs)
+                            continue
+                        cwrite("[熔断] 未完成区间太碎，切不出单连接（已降到极限 %d）"
+                               % len(segments))
+                    if (not errors and len(segments) > 1 and now > starve_deadline):
+                        seg_done = [s["done"] for s in segments]
+                        win_r = seg_stats["retries"] - last_retry_total
+                        starved_now, n_starved = concurrency_starved(seg_done)
+                        storm = retry_storm(win_r, len(segments))
+                        no_progress = (prog.cur() if prog else 0) <= layout_base
+                        if starved_now or (storm and no_progress):
+                            new_n = max(1, len(segments) // 2)
+                            if starved_now:
+                                why = "%d/%d 个分段 %d 秒零进度" % (
+                                    n_starved, len(seg_done), int(STARVE_SEC))
+                            else:
+                                why = "%d 秒零进度却有 %d 次分段重试" % (
+                                    int(STARVE_SEC), win_r)
+                            cwrite("[自动] 检测到%s —— 源站并发能力有限，"
+                                   "降到 %d 个连接（进度保留，不是重下）"
+                                   % (why, new_n))
+                            stopped_up = True
+                            # 降档是"源站弱"的直接证据，记到本次运行结束：
+                            # 只改 preferred_n 不够 —— 那只能决定下一轮的起点，
+                            # 下一轮照样会沿升档阶梯一路往上试。
+                            weak_source = True
+                            new_segs = _rescale_segments(segments, new_n)
+                            # 防呆：洞碎到切不出更少的段时**不要**换布局，
+                            # 否则会每轮算出同样多的段、原地打转（真踩过的坑）。
+                            if len(new_segs) >= len(segments):
+                                cwrite("[自动] 未完成区间太碎，切不出更少的连接"
+                                       "（已降到极限 %d）" % len(segments))
+                            else:
+                                preferred_n = max(1, len(new_segs))
+                                _swap_workers(new_segs)
+                                continue
+                    # ── (2) 升档：只有"这一窗干净且确有吞吐收益"才加连接 ──────
+                    if (auto and ramp is not None and not stopped_up
+                            and scale_idx < len(ramp) - 1
+                            and not errors and now - last_window[0] >= SCALE_WINDOW_SEC):
                         done_now = prog.cur()
                         w_speed = (done_now - last_window[1]) / max(now - last_window[0], 0.1)
+                        win_r = seg_stats["retries"] - last_retry_total
                         last_window = (now, done_now)
-                        healthy = all(s["done"] > 0 for s in segments)
-                        if scale_idx == 0:
-                            should_scale = healthy  # 首个窗口:无饥饿即扩容
-                        else:
-                            # 后续窗口:聚合吞吐比上一档提升 >=15% 才继续扩
-                            should_scale = healthy and w_speed >= agg_speeds[-1] * 1.15
-                        agg_speeds.append(w_speed)
-                        if should_scale:
+                        last_retry_total = seg_stats["retries"]
+                        # 旧代码这里判健康用的是 `all(s["done"] > 0)`，即"每段都
+                        # 滴到过一滴"就算健康 —— 818MB 的源站上滴速 2KB/s 也算健康，
+                        # 于是 8→16→23 一路加连接，把本来能跑的单连接拖成 502 风暴。
+                        # 现在：挨饿或有重试风暴 = 这一窗不干净 → 既不扩容也不下结论，
+                        # 下一窗再看（快源偶发闪断不该被判死刑）。
+                        storm = retry_storm(win_r, len(segments))
+                        clean = (not any(s["done"] == 0 for s in segments)) and not storm
+                        do_scale = False
+                        if clean:
+                            if scale_idx == 0:
+                                do_scale = w_speed > 0
+                            else:
+                                # 后续窗口:聚合吞吐比上一档干净窗口提升 >=15% 才继续扩
+                                do_scale = w_speed >= prev_clean * 1.15
+                            if not do_scale:
+                                stopped_up = True   # 干净的一窗却没提速 → 扩容无收益
+                            prev_clean = w_speed
+                        if do_scale:
                             scale_idx += 1
                             new_n = ramp[scale_idx]
                             cwrite("[自动] 当前聚合 %s/s,扩到 %d 线程..." % (
                                 human_bytes(w_speed), new_n))
-                            cancel.set()
-                            for t in threads:
-                                t.join()
-                            segments = _rescale_segments(segments, new_n)
-                            if not segments:
+                            new_segs = _rescale_segments(segments, new_n)
+                            if not new_segs:
                                 break  # 已全部完成
-                            _write_part_meta_v2(meta_path, request_url, segments, total)
-                            wlock = threading.Lock()
-                            cancel = threading.Event()
-                            prog = Progress(base=prog.cur(), total=total, is_tty=is_tty,
-                                            quiet=args.quiet, tag="%d 线程" % new_n)
-                            errors = []
-                            threads = []
-                            for i, seg in enumerate(segments):
-                                t = threading.Thread(
-                                    target=_seg_worker,
-                                    args=(i, seg, total, fh, wlock, cancel, prog, args,
-                                          request_url, meta_path, segments, errors),
-                                    daemon=True)
-                                threads.append(t)
-                                t.start()
+                            _swap_workers(new_segs)
                             continue
-                        scale_idx = len(ramp)  # 扩容无收益,停止扩容
                     time.sleep(2)
             finally:
                 cancel.set()
@@ -1279,16 +1526,25 @@ def download_multi(args, url, target, part, total, run_id, ledger, is_tty, outdi
                         % int(STALL_ABORT_SEC),
                         hint="将自动重试；若持续无进度，源服务器可能已失效",
                         retryable=True))
-            if bailed:
-                move_to_trash([part, meta_path], outdir)
-                raise MultiUnsupported(
-                    "检测到服务器串行响应(30 秒内部分分段零进度),已回退单线程")
             if errors:
                 multi_us = [e for e in errors if isinstance(e, MultiUnsupported)]
                 if multi_us:
                     move_to_trash([part, meta_path], outdir)
                     raise multi_us[0]
                 fe = errors[0]
+                # 失败提示要说清真正的出路。旧版一律「可尝试增大 --timeout」，
+                # 但这类故障里 timeout 不是病根（单连接 3.5 秒就拿到 1MiB）——
+                # 病根是连接开太多。分段重试/5xx 密集就是那个证据。
+                if (int(seg_stats.get("retries") or 0) >= 5
+                        and int(seg_stats.get("http5xx") or 0) >= 2):
+                    # auto 模式现在会自己熔断（见上面的 HTTP5XX_TRIP），所以这里
+                    # 不再把责任推给用户手动加参数 —— 只说明现象与可选的固定姿势。
+                    # 显式 --segments 仍然有意义：它跳过"先开 8 个再往下试"的过程。
+                    fe.hint = ("本次共 %d 次分段重试（其中 %d 次 HTTP 5xx）——"
+                               "这是源站扛不住多连接的信号，auto 模式已锁为单连接。"
+                               "想从第一秒就用单连接，可加 --segments 1，"
+                               "或在网页直链下载处勾选「兼容弱源站」（已下进度会续传）。"
+                               % (int(seg_stats["retries"]), int(seg_stats["http5xx"])))
                 cur = int(prog.cur()) if prog else sum(s["done"] for s in segments)
                 dur = time.monotonic() - t0
                 ledger_write(ledger, run_id=run_id, attempt=attempt, url=ledger_url,
@@ -1451,7 +1707,7 @@ def run_resolve(args):
     if notice:
         cwrite("提示:%s" % notice)
     cwrite("[解析] 正在检查链接可用性...")
-    p = probe(url, args.timeout)
+    p = probe(url, min(float(args.timeout), PROBE_TIMEOUT_MAX))
     info = {"input": url, "direct": p["final_url"] or url, "kind": "direct",
             "filename": p["filename"], "size": p["total"],
             "accept_ranges": bool(p["accept_ranges"]),
@@ -1466,7 +1722,7 @@ def run_resolve(args):
                 "链接返回的是网页而非文件,且未能从中解析出直链(%s)" % (why or "未知原因"),
                 hint="请确认链接是否为文件直链;若是分享页,请提供页面指向的真实下载地址",
                 retryable=False)
-        p2 = probe(cands[0], args.timeout)
+        p2 = probe(cands[0], min(float(args.timeout), PROBE_TIMEOUT_MAX))
         info["direct"] = cands[0]
         info["kind"] = "html-intermediate"
         info["candidates"] = cands
@@ -1527,7 +1783,7 @@ def run(args):
     # 1. 预检:链接可用性探测
     cwrite("[探测] 正在检查链接可用性...")
     try:
-        p = probe(url, args.timeout)
+        p = probe(url, min(float(args.timeout), PROBE_TIMEOUT_MAX))
     except FetchError as fe:
         fe.attempts_used = 0
         ledger_write(ledger, run_id=run_id, attempt=0, url=redact_url(url), status="failed",
@@ -1674,10 +1930,15 @@ def build_parser():
                     help="连接/读取超时秒数(默认 30;超过即判定无响应并重试)")
     ap.add_argument("--backoff", type=_nonneg_float, default=2.0, metavar="SEC",
                     help="重试退避基数,指数增长(默认 2,封顶 60)")
+    ap.add_argument("--proxy", default="auto", metavar="auto|none|URL",
+                    help="代理策略:auto=沿用系统/环境设置(默认);none=强制直连,忽略所有代理;"
+                         "URL=只走这个代理(如 http://127.0.0.1:7890)。"
+                         "下载卡住又说不清是链路还是源站时,拿 none/URL 各跑一次即可分辨")
     ap.add_argument("--no-resume", action="store_true",
                     help="禁用断点续传(默认启用)")
     ap.add_argument("-s", "--segments", type=_segments_arg, default="auto", metavar="N|auto",
-                    help="多线程分段数:auto=自适应 8→16→32(默认);N=固定段数(1=单线程);遇串行响应源自动回退单线程")
+                    help="多线程分段数:auto=自适应(会按实测吞吐升降,遇并发拖后腿的源自动降到单连接);"
+                         "N=固定段数(1=单线程);续传时 N 会覆盖盘上的旧分段布局")
     ap.add_argument("--overwrite", action="store_true",
                     help="允许替换同名已存在文件(旧文件移入 .clawfetch_trash/ 隔离区,不删除;"
                          "默认不覆盖,自动另存编号副本)")
@@ -1698,6 +1959,32 @@ def build_parser():
     ap.add_argument("-V", "--version", action="version",
                     version="%s %s" % (PROGRAM, VERSION))
     return ap
+
+
+def apply_proxy_setting(args):
+    """按 --proxy 决定**整进程**的出网路径，返回一句人类可读的说明。
+
+    为什么是「整进程装一次 opener」而不是改每个调用点：本文件有 5 处裸
+    urllib.request.urlopen。install_opener() 换掉的是 urlopen 内部用的那个
+    全局 opener，所以所有调用点自动生效，不会漏。
+    """
+    mode = (getattr(args, "proxy", None) or "auto").strip()
+    if mode == "auto":
+        # 把"现在到底走了哪条路"写出来 —— 这类问题最耗时间的就是不知道走了什么代理
+        try:
+            eff = urllib.request.getproxies() or {}
+        except Exception:
+            eff = {}
+        return "auto(沿用系统/环境设置:%s)" % (
+            ",".join("%s=%s" % kv for kv in sorted(eff.items())) or "无代理,直连")
+    if mode.lower() in ("none", "no", "off", "direct"):
+        urllib.request.install_opener(
+            urllib.request.build_opener(urllib.request.ProxyHandler({})))
+        return "none(强制直连,忽略一切代理设置)"
+    url = mode if "://" in mode else "http://" + mode
+    urllib.request.install_opener(urllib.request.build_opener(
+        urllib.request.ProxyHandler({"http": url, "https": url})))
+    return "URL(只走 %s)" % url
 
 
 def console_init():
@@ -1744,8 +2031,23 @@ def _preassign_targets(args, urls):
     for i, u in enumerate(urls):
         name = None
         try:
-            p = probe(u, min(float(args.timeout), 10.0))
+            p = probe(u, min(float(args.timeout), PROBE_TIMEOUT_MAX))
             name = p.get("filename")
+            # HTML 中转页:**先解析成直链,再取名**。
+            # 不解析的话这里只能拿到 URL 末段(/download/<id> 这种页面地址),
+            # 而真实文件名就写在直链的 Content-Disposition 里 —— 白白丢掉,
+            # 于是文件被存成 `<id>.bin`。单链接模式没这个问题(它在 run() 里
+            # 解析完会递归重跑一遍,取名自然用的是直链),漏的只有并行批量这条路。
+            if not name and "html" in (p.get("content_type") or ""):
+                tmo = min(float(args.timeout), PROBE_TIMEOUT_MAX)
+                direct, why = resolve_html_page(p.get("final_url") or u, tmo)
+                if direct:
+                    name = probe(direct, tmo).get("filename")
+                    cwrite("[批量] 链接 %d 是网页中转页 → 已解析直链后取名:%s"
+                           % (i + 1, sanitize_filename(name) or "(直链未提供文件名)"))
+                else:
+                    cwrite("[批量] 链接 %d 是网页中转页,但没解析出直链(%s)"
+                           % (i + 1, why or "未知原因"))
         except Exception:
             name = None
         name = sanitize_filename(name) or sanitize_filename(url_last_segment(u)) \
@@ -1806,6 +2108,11 @@ def run_batch(args, urls):
             code = fe.code
         with rlock:
             results.append((u, code, err_msg))
+            ndone = len(results)
+        # 每完成一个就报一次总进度：并行时 quiet=True 关掉了逐文件进度条，
+        # 没有这一行的话调用方（网页任务卡）在整个批量过程中看不到任何进展，
+        # 只能等最后那句总结 —— 5 个链接的长任务看起来就像卡死了。
+        cwrite("[批量] 已完成 %d/%d" % (ndone, len(urls)))
         return code
 
     targets = {}
@@ -1865,6 +2172,9 @@ def main(argv=None):
     console_init()
     args = build_parser().parse_args(argv)
     try:
+        proxy_note = apply_proxy_setting(args)
+        if not getattr(args, "quiet", False):
+            cwrite("[代理] %s" % proxy_note)
         urls = list(args.url or [])
         if getattr(args, "batch", None):
             urls += _read_batch_links(args.batch)

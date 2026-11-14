@@ -325,10 +325,26 @@ while 未停止:
 
 #### `storage.py`
 
-- `sanitize_name()` —— 清洗 Windows 非法字符、去除首尾点与空格、限制长度
-- `build_output_dir()` —— 生成「平台 / 主播昵称 / 日期」三级目录
-- `build_segment_path()` / `build_merged_path()` —— 严格按命名规则生成文件路径
+- `sanitize_name()` —— 清洗 Windows 非法字符、折叠连续空白、去除首尾点/下划线/**连字符**、限制长度
+- `make_session_naming()` —— **构造一场直播的命名快照** `SessionNaming`
+  （平台 / 昵称 / 房间号 / 起始时间），昵称缺失时回退为 `未知主播`；
+  传入的昵称若恰好等于房间号（历史调用方的 `nickname or room_id` 写法）同样按未识别处理
+- `SessionNaming.segment_name()` / `.merged_name()` —— 按命名契约拼文件名
+- `SessionNaming.date_token` / `.time_token` / `.datetime_token` —— `YYYY-MM-DD`、
+  `HHMMSS`、以及二者用 `_` 连接成的文件名分量 `YYYY-MM-DD_HHMMSS`
+- `SessionNaming.dir_nickname` —— 目录用昵称片段，未识别时追加房间号消歧（`未知主播-<房间号>`）
+- `build_output_dir_from_naming()` —— 生成「平台 / 主播昵称」**两级**目录（与文件名同源）
+- `reserve_path()` —— 文件级冲突规避：已存在则递增 `-2` / `-3` …，**绝不覆盖已有录像**
 - `get_free_space_gb()` —— 磁盘剩余空间检测（路径不存在时向上回溯到最近存在的父目录）
+
+> **命名契约**（唯一权威出处，改动请同步 README / 界面「使用说明」）：
+> 目录 `<root>/<平台>/<昵称>/`（**只有两级，日期不单独建目录**）；
+> 文件名 `{平台}-{昵称}-{YYYY-MM-DD}_{HHMMSS}-{序号}.{容器}`（成品后缀 `-merged`）。
+> 房间号不参与文件名，仅在昵称未识别时用于目录消歧。
+>
+> ⚠️ 时间分量内部含横线（`2026-09-24`），解析文件名时**不能**简单 `split("-")`
+> —— 昵称本身也可能含横线。应锚定结尾的 `_HHMMSS-序号`（正则
+> `_(\d{6})-(merged|\d{3})(-\d+)?$`），左侧剩余部分的最右 10 位即日期。
 
 #### `ffmpeg_utils.py`
 
@@ -474,29 +490,30 @@ session.close()  ← 对话框关闭时 cancel() + wait() 保证浏览器一定�
                bus.publish(RECORDING_STARTED)
 
 ④ 录制线程
-     _prepare_output_dir()  → <保存路径>/抖音/某某主播/2026-09-23/
+     _make_session_naming() → 冻结本场命名（平台/昵称/起始时间）
+     _prepare_output_dir()  → <保存路径>/抖音/阿姨芥末/2026年08月28日/
      while 未停止:
         ├─ stream_provider()
         │    → registry.resolve_stream(parser, room_id, config)
         │        · fetch_stream(ORIGIN)  → flv_pull_url["FULL_HD1"]
         │        · 失败则降级 → publish(QUALITY_FALLBACK)
-        │        · 再失败则 Playwright 兜底
-        ├─ build_segment_path(..._001.flv)
+        │        · 再失败则 Playwright 兜底（顺带从页面标题解析昵称）
+        ├─ build_segment_path(..., naming=本场快照)  ← 分片名与目录同源
         ├─ Popen(ffmpeg -c copy -f flv ...)  ← 直存原始流，不转码
         └─ 监控循环：尺寸 / 时长 / 卡顿 / 磁盘 / 停止信号
 
-        （若中途卡顿 → STALL → 等待 15s → 序号 +1，写入 _002.flv）
+        （若中途卡顿 → STALL → 等待 15s → 序号 +1，写入 -002.flv）
 
 ⑤ 下播
      下一轮 _tick() 检测到 OFFLINE
        → recorder.stop("live_ended")
             ├─ 向 ffmpeg stdin 写 'q' 优雅退出
             ├─ _finalize()
-            │    ├─ merge_segments([_001, _002], ..._merged.flv)
+            │    ├─ merge_segments([-001, -002], ...-merged.flv)
             │    │     · concat 合并 → ffprobe 时长校验 → 异常则归一化重试
-            │    ├─ 清理原始分片 _001 / _002
+            │    ├─ 清理原始分片 -001 / -002
             │    └─ 可选 remux_to_mp4()
-            └─ publish(RECORDING_FINISHED, {file: "..._merged.flv"})
+            └─ publish(RECORDING_FINISHED, {file: "...-merged.flv"})
 
 ⑥ 界面响应
      每秒 QTimer → engine.snapshot() → 表格原地更新
@@ -572,7 +589,7 @@ _HOST_HINTS = {
 | 改变 ffmpeg 拉流参数 | `recorder/ffmpeg_recorder.py` → `_build_ffmpeg_command()` |
 | 改变分片/重连触发条件 | `recorder/ffmpeg_recorder.py` → `_monitor_process()` |
 | 改变合并策略 | `recorder/merger.py` → `merge_segments()` |
-| 改变文件命名规则 | `recorder/storage.py` → `build_segment_path()` |
+| 改变文件命名规则 | `recorder/storage.py` → `make_session_naming()` + `SessionNaming.segment_name()` |
 | 新增配置项 | `config/settings.py` → `AppConfig`，并在 `ui/settings_dialog.py` 添加控件 |
 
 ### 平台接口变更的排查流程
@@ -643,7 +660,7 @@ python smoke_test.py --keep    # 保留产物以便人工检查
 | A3 开播状态 | `check_live` 判定为「直播中」且解析出昵称 |
 | A4 取流 | 取得可拉流地址（原画 FLV 优先） |
 | A5 真实录制 | 用真实 `StreamRecorder` 录制 → 产出非空文件 → **完整解码**测量时长 |
-| A6 目录与命名 | 「平台/主播昵称/日期」三级 + 文件名规则 |
+| A6 目录与命名 | 「平台/主播昵称」两级 + `平台-昵称-日期_时刻-序号` 文件名 |
 | A7 转封装 | 成品无损转封装为 MP4 |
 | A8 安全闸门 | **合成响应**验证：`status=4` + 空流地址时必须抛 `RoomUnavailableError`（不得回落为普通 `PlatformError` 而触发浏览器兜底） |
 | A9 分卷与合并 | 调小分片阈值强制分卷 → 多分片无损合并 → 时长完整 |

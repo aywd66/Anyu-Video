@@ -109,8 +109,8 @@ def validate_template(template: str, *, field_name: str = "template") -> None:
 
     注意：``{id}`` **不再强制**。用户可选择不含作品 ID 的模板（例如用
     ``{date} {hour}.{minute}.{second}_{title}_{type}`` 复刻 legacy 布局）。代价是
-    基于文件名的磁盘判重会失效：默认 ``redownload_missing_files=true`` 时会再次下载；
-    关闭该开关后，才会在数据库仍有有效下载记录时继续跳过。
+    基于文件名的磁盘判重会失效：``redownload_missing_files`` 保持默认 false 时，
+    仍会按数据库里的下载记录跳过（删了本地文件也算下过）；把它改成 true 才会重新下载。
     """
     if not isinstance(template, str):
         raise TemplateValidationError(f"{field_name} must be a string")

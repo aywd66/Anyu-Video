@@ -121,8 +121,23 @@ class _HistoryDatabase:
 
 
 @pytest.mark.asyncio
-async def test_missing_file_redownloads_by_default_without_history_lookup(tmp_path):
+async def test_missing_file_skips_by_default_when_history_exists(tmp_path):
+    """默认 redownload_missing_files=False：本地文件被删了也算「下过」，不再重下。"""
     downloader, api_client = _build_downloader(tmp_path)
+    history = _HistoryDatabase(downloaded=True)
+    downloader.database = history
+
+    assert await downloader._should_download("7412345678901234567") is False
+    assert history.calls == 1
+
+    await api_client.close()
+
+
+@pytest.mark.asyncio
+async def test_missing_file_redownloads_when_explicitly_opted_in(tmp_path):
+    """打开 redownload_missing_files 才回到「删了重下」的旧行为。"""
+    downloader, api_client = _build_downloader(tmp_path)
+    downloader.config.update(redownload_missing_files=True)
     history = _HistoryDatabase(downloaded=True)
     downloader.database = history
 
@@ -185,7 +200,7 @@ async def test_video_downloader_reports_item_progress(tmp_path, monkeypatch):
     async def _fake_get_video_detail(_aweme_id: str):
         return {"aweme_id": "123", "author": {"nickname": "tester"}}
 
-    async def _fake_download_aweme(self, _aweme_data):
+    async def _fake_download_aweme(self, _aweme_data, outcome=None):
         return True
 
     downloader._should_download = _fake_should_download.__get__(downloader, VideoDownloader)

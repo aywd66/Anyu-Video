@@ -139,6 +139,9 @@
       if (!sb) return;
       const groups = {};
       cfg.NAV.menu.forEach((m) => {
+        // topnav:false / side:false 的条目只作页面元数据（router 面包屑），
+        // 不在侧栏渲染按钮（见 config.js 说明）
+        if (m.topnav === false || m.side === false) return;
         (groups[m.group] = groups[m.group] || []).push(m);
       });
 
@@ -147,8 +150,8 @@
         menuHtml += '<div class="side-label tag-caps">' + esc(g) + '</div><nav class="nav" aria-label="' + esc(g) + '">';
         groups[g].forEach((m) => {
           menuHtml +=
-            '<button class="nav__item" data-nav-id="' + esc(m.id) + '">' +
-            I.icon(m.icon, 17) + '<span>' + esc(m.label) + '</span>' +
+            '<button class="nav__item" data-nav-id="' + esc(m.id) + '" title="' + esc(m.label) + '">' +
+            I.icon(m.icon, 17) + '<span class="nav__txt">' + esc(m.label) + '</span>' +
             (m.badge ? '<span class="nav__badge" id="nav-task-badge" hidden>0</span>' : '') +
             '<span class="nav__dot"></span>' +
             '</button>';
@@ -158,25 +161,17 @@
 
       sb.innerHTML =
         C.brand() +
-        '<div class="side-section">' +
-          '<div class="side-label tag-caps">平台</div>' +
-          '<div class="platform-switch" role="tablist" aria-label="平台切换">' +
-          cfg.NAV.platforms.map((p) =>
-            '<button class="platform-btn" role="tab" data-dot="' + esc(p.dot) + '" data-platform-id="' + esc(p.id) + '" ' +
-            'aria-selected="false"><span class="platform-btn__dot"></span>' + I.icon(p.icon, 16) + '<span class="platform-btn__label">' + esc(p.label) + '</span></button>'
-          ).join('') +
-          '</div>' +
-          '<div class="platform-sub" id="platform-sub"></div>' +
-        '</div>' +
-        '<div class="side-section side-section--account">' +
-          '<div class="side-card" id="account-card"></div>' +
-        '</div>' +
+        /* 2026-11-07：侧栏顶部的「平台导航（工作台/抖音下载/哔哩哔哩/TikTok/YouTube）
+         * + 账号卡（哔哩哔哩·游客可用）」整块移除，替换为菜单项列表 ——
+         * 链接输入已统一到启动台，平台工作台页仅作任务/产物管理（无导航入口，
+         * 从启动台与首页的模块卡进入）。setPlatform/updateAccountCard 的
+         * 绑定代码保留（元素不存在时安全空转），数据仍在 config.js。 */
         '<div class="side-section side-section--menu">' + menuHtml + '</div>' +
         '<div class="side-section">' +
           '<div class="side-actions">' +
-            '<button class="btn btn--ghost btn--sm" id="btn-settings-nav">' + I.icon('settings', 15) + '设置</button>' +
-            '<button class="btn btn--ghost btn--sm" id="btn-netdiag">' + I.icon('activity', 15) + '网络诊断</button>' +
-          '</div>' +
+          /* 「设置」不再放这里：菜单「系统」组已有同名入口，重复按钮在折行顶栏里尤其显眼 */
+          '<button class="btn btn--ghost btn--sm" id="btn-netdiag">' + I.icon('activity', 15) + '网络诊断</button>' +
+        '</div>' +
         '</div>' +
         '<div class="side-section side-section--env">' +
           '<div class="env-lights" id="env-lights" hidden></div>' +
@@ -202,7 +197,6 @@
       sb.querySelectorAll('.nav__item').forEach((btn) => {
         btn.addEventListener('click', () => window.DYRouter.go(btn.dataset.navId));
       });
-      document.getElementById('btn-settings-nav').addEventListener('click', () => window.DYRouter.go('settings'));
       document.getElementById('btn-netdiag').addEventListener('click', () => this.openNetDiag());
       document.getElementById('btn-ledger').addEventListener('click', () => this.openLedger());
     },

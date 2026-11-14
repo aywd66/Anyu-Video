@@ -90,6 +90,21 @@ class RoomRuntime:
         """用于界面展示的昵称（未解析到之前用房间号占位）。"""
         return self.nickname or self.entry.nickname or self.entry.room_id or self.entry.raw_input
 
+    @property
+    def resolved_nickname(self) -> str:
+        """已解析到的**真实**昵称（未识别时为空串，不回退到房间号）。
+
+        与 :attr:`display_nickname` 的区别：后者为界面可读性会把房间号当
+        占位名，而命名逻辑必须能区分「真的昵称」和「只是占位」——
+        否则房间号会被写进文件名里的「昵称」分量。
+        """
+        return self.nickname or self.entry.nickname or ""
+
+    def sync_nickname_to_entry(self) -> None:
+        """把运行时昵称回写进持久化条目（供录制器冻结命名前调用）。"""
+        if self.nickname and not self.entry.nickname:
+            self.entry.nickname = self.nickname
+
     def is_recording(self) -> bool:
         return self.recorder is not None and self.recorder.is_active
 
@@ -374,8 +389,25 @@ class MonitorEngine:
 
         # 注意：首次检测会把分享链接解析为 room_id，届时 runtime.key 会变化，
         # 因此这里用 runtime 对象本身配对结果，而不是用 key，避免结果错配。
+        #
+        # 2026-11-13 错峰提交：原先所有房间一次性 pool.submit，并发 6 路
+        # 同一瞬间打到快手 —— 实测全员触发「请求过快」风控（本机 Cookie
+        # 正常也拦）。改为按序号隔开 spread 秒再检测，把一轮的请求摊平：
+        # spread = 轮询间隔 × 60% ÷ 房间数（夹在 2~30 秒），保证一轮在
+        # 下一个轮询周期之前完成。
+        import time as _time
+        spread = max(2.0, min(30.0, (self.config.poll_interval * 0.6) / max(1, len(targets))))
+
+        def _staggered(rt, delay):
+            if delay > 0:
+                _time.sleep(delay)
+            return self._check_one(rt)
+
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            pairs = [(runtime, pool.submit(self._check_one, runtime)) for runtime in targets]
+            pairs = [
+                (runtime, pool.submit(_staggered, runtime, idx * spread))
+                for idx, runtime in enumerate(targets)
+            ]
             for runtime, future in pairs:
                 try:
                     result = future.result()
@@ -416,10 +448,15 @@ class MonitorEngine:
                 logger.warning("解析房间号失败（%s）：%s", entry.raw_input, exc)
                 return None
 
-            entry.room_id = room_id
             with self._lock:
-                # key 因 room_id 变化而改变，需要迁移
+                # ⚠️ old_key 必须在 entry.room_id 赋值**之前**取：key 属性实时由
+                # entry 派生（room_id 有值时 key=platform:room_id），赋值后再取
+                # 拿到的是新 key，pop 变成空操作，旧槽位（platform:raw_input）
+                # 永远留在字典里 —— 同一房间挂两个 key：快照重复行、且按显示
+                # key 停用/删除会 404「监控清单里没有这一项」（2026-11-13 实测：
+                # 快手分享短链添加的房间解析后无法从网页停用）。
                 old_key = runtime.key
+                entry.room_id = room_id
                 self._runtimes.pop(old_key, None)
                 self._runtimes[runtime.key] = runtime
             self.store.save()
@@ -518,6 +555,10 @@ class MonitorEngine:
             return
 
         entry = runtime.entry
+        # 启动录制前，确保「运行时解析到的昵称」已落到 entry ——
+        # 录制器会在 start() 时冻结命名快照，此刻的 entry.nickname
+        # 就是本场文件名的唯一依据。
+        runtime.sync_nickname_to_entry()
 
         def stream_provider() -> StreamInfo:
             """每次取流都重新解析地址，规避平台播放地址过期。"""

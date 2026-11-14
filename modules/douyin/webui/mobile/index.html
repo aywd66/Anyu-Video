@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#F7F6F3">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="手机下载">
+<meta name="robots" content="noindex, nofollow">
+<title>手机下载 · 遥控电脑下载</title>
+<link rel="stylesheet" href="/m/style.css">
+</head>
+<body>
+<div class="app">
+
+  <div class="topbar">
+    <div class="title">
+      <h1>手机下载</h1>
+      <p class="sub">粘一条链接，电脑替你下载</p>
+    </div>
+    <button type="button" class="theme-toggle" id="themeBtn" aria-label="切换深色模式">
+      <svg class="ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>
+      <svg class="ic-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.4M12 19.6V22M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2 12h2.4M19.6 12H22M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7"/></svg>
+    </button>
+    <div class="pill" id="pill"><span class="dot"></span><span id="pillText">连接中…</span></div>
+  </div>
+
+  <div class="tabs">
+    <button type="button" class="tab on" data-tab="download">下载</button>
+    <button type="button" class="tab" data-tab="rec">录制</button>
+  </div>
+
+  <!-- ============ 下载 ============ -->
+  <section id="tab-download">
+    <section class="card">
+      <label class="field-label" for="text">把分享文案或链接粘到这里</label>
+      <textarea id="text" placeholder="例：7.32 复制打开抖音，看看【…】 https://v.douyin.com/xxxxx/"></textarea>
+
+      <div class="chips" id="chips">
+        <button type="button" class="chip on" data-kind="auto">自动识别</button>
+        <button type="button" class="chip" data-kind="douyin">抖音</button>
+        <button type="button" class="chip" data-kind="kuaishou">快手</button>
+        <button type="button" class="chip" data-kind="direct">直链文件</button>
+      </div>
+
+      <div class="detected hide" id="detected"></div>
+
+      <div class="hint hide" id="ksmode">
+        下载范围
+        <select id="mode">
+          <option value="all">全部作品（主页链接）</option>
+          <option value="1">只下最新 1 个</option>
+        </select>
+      </div>
+
+      <button type="button" class="btn-primary" id="go">开始下载</button>
+
+      <div class="hint hide" id="kslogin">
+        快手还没有登录态，无法下载。
+        <button type="button" class="link" id="ksLoginBtn">在电脑上打开扫码登录 →</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="tasks-head">
+        <h2>任务</h2>
+        <button type="button" class="link" id="refresh">刷新</button>
+      </div>
+      <div id="tasks"><div class="empty">还没有任务</div></div>
+    </section>
+
+    <footer class="footnote">
+      <p>文件保存在电脑上（<span id="outdirLabel">抖音</span>）：<code id="outdir">—</code><span id="free"></span></p>
+      <p>本页地址 <code id="selfurl">—</code>，可「添加到主屏幕」下次一点就开。</p>
+    </footer>
+  </section>
+
+  <!-- ============ 录制 ============ -->
+  <section id="tab-recording" class="hide">
+    <section class="rec-card">
+      <div class="rec-status">
+        <div class="lead">
+          <h2>录制内核</h2>
+          <div class="pill" id="recPill"><span class="dot"></span><span id="recPillText">连接中…</span></div>
+        </div>
+        <button type="button" class="btn-ghost" id="recMonitorBtn">开始监控</button>
+      </div>
+      <div class="rec-stats" id="recStats">读取中…</div>
+      <div class="rec-login hide" id="recKsLogin">
+        快手当前未登录，无法监控指定主播。
+        <button type="button" class="link" id="recKsBtn">在电脑上打开扫码登录 →</button>
+      </div>
+    </section>
+
+    <section class="rec-card">
+      <div class="field-label">添加直播间（粘贴 live.douyin.com / live.kuaishou.com 链接）</div>
+      <textarea id="recText" placeholder="例：https://live.douyin.com/7123456789"></textarea>
+      <div class="chips" id="recChips">
+        <button type="button" class="chip on" data-kind="auto">自动识别</button>
+        <button type="button" class="chip" data-kind="douyin">抖音</button>
+        <button type="button" class="chip" data-kind="kuaishou">快手</button>
+      </div>
+      <div class="detected hide" id="recDetected"></div>
+      <button type="button" class="btn-primary" id="recAdd">加入监控</button>
+    </section>
+
+    <section class="rec-card">
+      <div class="tasks-head">
+        <h2>监控列表</h2>
+        <button type="button" class="link" id="recRefresh">刷新</button>
+      </div>
+      <div id="recRooms"><div class="empty">还没有监控对象</div></div>
+    </section>
+
+    <footer class="footnote">
+      <p>录制产物保存在电脑上（直播录制模块设置的目录）。</p>
+      <p>开播即录：主播开播自动开始，下播自动合并；此页可手动停止、停用或移除。</p>
+    </footer>
+  </section>
+
+</div>
+<div id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  var DY = ['douyin.com', 'iesdouyin.com', 'douyinapp.com'];
+  var KS = ['kuaishou.com', 'gifshow.com', 'chenzhongtech.com', 'ksurl.cn',
+            'kwai.com', 'kuaishouapp.com'];
+  var KIND_NAME = { douyin: '抖音', kuaishou: '快手', direct: '直链文件' };
+  var STATUS = {
+    pending: ['排队中', 'pending'], running: ['下载中', 'running'],
+    success: ['已完成', 'success'], failed: ['失败', 'failed'],
+    canceled: ['已取消', 'failed'], cancelled: ['已取消', 'failed']
+  };
+
+  var kind = 'auto';
+  var info = null;
+  var timer = null;
+  var busy = false;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var textEl = $('text'), goEl = $('go'), tasksEl = $('tasks');
+
+  function toast(msg, cls) {
+    var t = $('toast');
+    t.textContent = msg;
+    t.className = 'on' + (cls ? ' ' + cls : '');
+    clearTimeout(t._h);
+    t._h = setTimeout(function () { t.className = ''; }, cls === 'err' ? 6000 : 3200);
+  }
+
+  function hostOf(url) {
+    try { return new URL(url).hostname.toLowerCase(); } catch (e) { return ''; }
+  }
+
+  function detect(url) {
+    var h = hostOf(url);
+    if (!h) return '';
+    var i;
+    for (i = 0; i < DY.length; i++) {
+      if (h === DY[i] || h.slice(-(DY[i].length + 1)) === '.' + DY[i]) return 'douyin';
+    }
+    for (i = 0; i < KS.length; i++) {
+      if (h === KS[i] || h.slice(-(KS[i].length + 1)) === '.' + KS[i]) return 'kuaishou';
+    }
+    return 'direct';
+  }
+
+  /* 只认 ASCII（RFC 3986 的 URL 字符集）—— 与服务端 mobile_server.py 同一条口径。 */
+  function extractUrl(text) {
+    var m = String(text || '').match(/https?:\/\/[A-Za-z0-9\-._~%!$&()*+,;=:@/?#\[\]]+/i);
+    if (!m) return '';
+    return m[0].replace(/[.,;:!?)\]}]+$/, '');
+  }
+
+  function refreshDetect() {
+    var url = extractUrl(textEl.value);
+    var box = $('detected');
+    if (!url) { box.classList.add('hide'); box.textContent = ''; return; }
+    var g = detect(url);
+    var eff = kind === 'auto' ? g : kind;
+    box.classList.remove('hide');
+    box.innerHTML = '识别到链接，将按 <b>' + (KIND_NAME[eff] || eff) + '</b> 下载' +
+      (kind === 'auto' ? '（自动识别）' : '（你手动选的）');
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function syncKind() {
+    var g = detect(extractUrl(textEl.value));
+    var eff = kind === 'auto' ? (g || 'douyin') : kind;
+    $('ksmode').classList.toggle('hide', eff !== 'kuaishou');
+    var logged = info && info.kuaishou ? info.kuaishou.logged_in : null;
+    $('kslogin').classList.toggle('hide', eff !== 'kuaishou' || logged !== false);
+    var dirs = (info && info.out_dirs) || {};
+    $('outdirLabel').textContent = eff === 'auto' ? '自动' : (KIND_NAME[eff] || eff);
+    $('outdir').textContent = dirs[eff] || '（电脑端默认目录）';
+    $('free').textContent = (info && info.free_gb) ? '　（该盘剩余 ' + info.free_gb + ' GB）' : '';
+    refreshDetect();
+  }
+
+  function setPill(state, txt) {
+    var p = $('pill');
+    p.className = 'pill' + (state ? ' ' + state : '');
+    $('pillText').textContent = txt;
+  }
+
+  function loadInfo() {
+    return fetch('/api/m/info', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        info = d;
+        if (d.bridge_ok) setPill('ok', '电脑在线');
+        else setPill('bad', '内核未就绪');
+        $('selfurl').textContent = location.origin;
+        syncKind();
+      })
+      .catch(function () { setPill('bad', '连接不上电脑'); });
+  }
+
+  function fetchTasks() {
+    return fetch('/api/m/tasks', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { render(d.tasks || []); })
+      .catch(function () { /* 轮询失败不打断使用 */ });
+  }
+
+  function render(tasks) {
+    if (!tasks.length) {
+      tasksEl.innerHTML = '<div class="empty">还没有任务</div>';
+      return;
+    }
+    var html = '';
+    tasks.forEach(function (t) {
+      var st = STATUS[t.status] || [t.status || '', ''];
+      var running = t.status === 'running' || t.status === 'pending';
+      var pct = t.progress;
+      var bar = '';
+      if (running) {
+        if (pct === null || pct === undefined) {
+          bar = '<div class="bar indet"><i></i></div>';
+        } else {
+          bar = '<div class="bar"><i style="width:' + Math.max(2, Math.min(100, pct)) + '%"></i></div>';
+        }
+      } else if (pct !== null && pct !== undefined && pct > 0) {
+        bar = '<div class="bar"><i style="width:' + Math.min(100, pct) + '%"></i></div>';
+      }
+      var counter = '';
+      if (t.total) {
+        counter = running ? (t.done + '/' + t.total + ' 个' +
+                             (t.failed ? '（失败 ' + t.failed + '）' : ''))
+                          : ('共 ' + t.total + ' 个' +
+                             (t.failed ? '，失败 ' + t.failed : ''));
+      }
+      var noteCls = t.status === 'failed' ? 'note bad' : 'note';
+      html += '<div class="task">' +
+        '<div class="top">' +
+          '<span class="name">' + esc(KIND_NAME[t.kind] || t.kind || '任务') + '</span>' +
+          '<span class="tag ' + st[1] + '">' + esc(st[0]) + '</span>' +
+        '</div>' +
+        '<div class="url">' + esc(t.url || '') + '</div>' +
+        (t.note ? '<div class="' + noteCls + '">' + esc(t.note) + '</div>' : '') +
+        (counter ? '<div class="' + noteCls + '">' + esc(counter) + '</div>' : '') +
+        bar +
+        (running || t.status === 'failed'
+          ? '<div class="row">' +
+            (running ? '<button type="button" class="link" data-cancel="' + esc(t.id) +
+                       '">取消这个任务</button>' : '') +
+            (t.status === 'failed' ? '<button type="button" class="link" data-why="' +
+                       esc(t.id) + '">看失败原因</button>' : '') +
+            '</div>' : '') +
+        '</div>';
+    });
+    tasksEl.innerHTML = html;
+  }
+
+  function submit() {
+    if (busy) return;
+    var raw = textEl.value.trim();
+    if (!raw) { toast('先粘一条链接吧'); textEl.focus(); return; }
+    var url = extractUrl(raw);
+    if (!url) { toast('这段内容里没找到 http(s) 链接', 'err'); return; }
+
+    busy = true;
+    goEl.disabled = true;
+    goEl.textContent = '正在下发…';
+
+    fetch('/api/m/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: raw, kind: kind, mode: $('mode').value })
+    }).then(function (r) { return r.json().then(function (d) { return [r.status, d]; }); })
+      .then(function (pair) {
+        var st = pair[0], d = pair[1];
+        if (d && d.ok) {
+          toast('已开始下载：' + (KIND_NAME[d.kind] || d.kind), 'ok');
+          textEl.value = '';
+          refreshDetect();
+          fetchTasks();
+        } else {
+          var msg = (d && (d.hint || d.error)) || '下发失败';
+          toast(msg, 'err');
+        }
+      })
+      .catch(function () { toast('连不上电脑，检查手机和电脑是否在同一个 WiFi', 'err'); })
+      .then(function () {
+        busy = false;
+        goEl.disabled = false;
+        goEl.textContent = '开始下载';
+      });
+  }
+
+  /* ---------- 事件 ---------- */
+  $('chips').addEventListener('click', function (e) {
+    var b = e.target.closest('.chip');
+    if (!b) return;
+    kind = b.getAttribute('data-kind');
+    [].forEach.call(this.querySelectorAll('.chip'), function (c) {
+      c.classList.toggle('on', c === b);
+    });
+    syncKind();
+  });
+
+  textEl.addEventListener('input', syncKind);
+  goEl.addEventListener('click', submit);
+  $('refresh').addEventListener('click', function () { fetchTasks(); });
+
+  tasksEl.addEventListener('click', function (e) {
+    var why = e.target.closest('[data-why]');
+    if (why) {
+      var id = why.getAttribute('data-why');
+      why.textContent = '读取中…';
+      fetch('/api/m/task/' + encodeURIComponent(id), { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          var lines = (d.log_tail || []).filter(function (s) { return s.trim(); });
+          toast(lines.length ? '失败原因：\n' + lines.slice(-6).join('\n')
+                             : '任务失败，但日志里没有更多信息', 'err');
+        })
+        .catch(function () { toast('读不到日志', 'err'); })
+        .then(function () { why.textContent = '看失败原因'; });
+      return;
+    }
+    var b = e.target.closest('[data-cancel]');
+    if (!b) return;
+    if (!confirm('确定取消这个下载任务？')) return;
+    fetch('/api/m/cancel/' + encodeURIComponent(b.getAttribute('data-cancel')), { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { toast(d.ok ? '已取消' : (d.error || '取消失败'), d.ok ? 'ok' : 'err'); fetchTasks(); })
+      .catch(function () { toast('取消失败', 'err'); });
+  });
+
+  $('ksLoginBtn').addEventListener('click', function () {
+    toast('已通知电脑弹出扫码窗口，请看电脑屏幕扫码', 'ok');
+    fetch('/api/m/kuaishou/login', { method: 'POST' }).then(function () {
+      setTimeout(loadInfo, 3000);
+    }).catch(function () {});
+  });
+
+  function tick() {
+    if (document.hidden) { timer = setTimeout(tick, 5000); return; }
+    fetchTasks().then(function () { timer = setTimeout(tick, 3000); });
+  }
+
+  loadInfo().then(function () {
+    fetchTasks();
+    timer = setTimeout(tick, 3000);
+  });
+})();
+
+/* =========================================================
+   主题切换（深色模式）
+   ========================================================= */
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var THEME_KEY = 'm-theme';
+  function applyTheme(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    var m = document.querySelector('meta[name="theme-color"]');
+    if (m) m.setAttribute('content', t === 'dark' ? '#141619' : '#F7F6F3');
+  }
+  applyTheme(localStorage.getItem(THEME_KEY) || 'light');
+  $('themeBtn').addEventListener('click', function () {
+    var cur = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+    var next = cur === 'dark' ? 'light' : 'dark';
+    applyTheme(next);
+    localStorage.setItem(THEME_KEY, next);
+  });
+})();
+
+/* =========================================================
+   顶部 Tab 切换（下载 / 录制）
+   ========================================================= */
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var currentTab = 'download';
+  function switchTab(t) {
+    currentTab = t;
+    $('tab-download').classList.toggle('hide', t !== 'download');
+    $('tab-recording').classList.toggle('hide', t !== 'rec');
+    [].forEach.call(document.querySelectorAll('.tab'), function (b) {
+      b.classList.toggle('on', b.getAttribute('data-tab') === t);
+    });
+    if (t === 'rec') { loadRecStatus(); }
+  }
+  [].forEach.call(document.querySelectorAll('.tab'), function (b) {
+    b.addEventListener('click', function () { switchTab(b.getAttribute('data-tab')); });
+  });
+
+  /* ---------- 录制控制 ---------- */
+  var PLAT_NAME = { douyin: '抖音', kuaishou: '快手' };
+  var RSTATUS = {
+    offline: ['未开播', 'offline'], pending: ['检测中', 'pending'],
+    recording: ['录制中', 'recording'], merging: ['合并中', 'merging'],
+    reconnecting: ['重连中', 'reconnecting'], error: ['异常', 'error'],
+    disabled: ['已停用', 'disabled'], paused: ['磁盘暂停', 'paused']
+  };
+  var recKind = 'auto';
+  var recRunning = false;
+  var recTimer = null;
+
+  function recToast(msg, cls) {
+    var t = $('toast');
+    t.textContent = msg;
+    t.className = 'on' + (cls ? ' ' + cls : '');
+    clearTimeout(t._h);
+    t._h = setTimeout(function () { t.className = ''; }, cls === 'err' ? 6000 : 3200);
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function extractUrl(text) {
+    var m = String(text || '').match(/https?:\/\/[A-Za-z0-9\-._~%!$&()*+,;=:@/?#\[\]]+/i);
+    if (!m) return '';
+    return m[0].replace(/[.,;:!?)\]}]+$/, '');
+  }
+  function recSetPill(state, txt) {
+    var p = $('recPill');
+    p.className = 'pill' + (state ? ' ' + state : '');
+    $('recPillText').textContent = txt;
+  }
+  function recDetect() {
+    var url = extractUrl($('recText').value);
+    var box = $('recDetected');
+    if (!url) { box.classList.add('hide'); box.textContent = ''; return; }
+    var host = (url.match(/^https?:\/\/([^/:?#]+)/i) || [])[1] || '';
+    var eff = recKind === 'auto'
+      ? (/douyin/.test(host) ? 'douyin' : /kuaishou/.test(host) ? 'kuaishou' : '')
+      : recKind;
+    if (!eff) { box.classList.add('hide'); box.textContent = ''; return; }
+    box.classList.remove('hide');
+    box.innerHTML = '识别为 <b>' + (PLAT_NAME[eff] || eff) + '</b> 直播间' +
+      (recKind === 'auto' ? '（自动识别）' : '（你手动选的）');
+  }
+
+  function loadRecStatus() {
+    return fetch('/api/m/rec/status', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.daemon) {
+          recSetPill('bad', '内核未运行');
+          var btn = $('recMonitorBtn');
+          btn.disabled = false; btn.textContent = '启动内核';
+          $('recStats').innerHTML = '录制内核未运行' +
+            (d.error ? '：' + esc(d.error) : '') +
+            '。点「启动内核」即可（也可在电脑上双击「启动直播录制器」）。';
+          $('recKsLogin').classList.add('hide');
+          $('recRooms').innerHTML = '<div class="empty">内核未运行</div>';
+          return;
+        }
+        recSetPill('running', '内核在线');
+        recRunning = !!d.running;
+        var btn = $('recMonitorBtn');
+        btn.disabled = false;
+        btn.textContent = d.running ? '停止监控' : '开始监控';
+        var c = d.counts || {};
+        var disk = d.disk_paused
+          ? '<span class="bad">磁盘暂停（已停录）</span>' : '磁盘正常';
+        $('recStats').innerHTML = '监控中 <b>' + (c.enabled || 0) + '</b> 个　·　录制中 <b>' +
+          (c.recording || 0) + '</b> 个　·　' + disk;
+        var ks = d.login && d.login.kuaishou;
+        $('recKsLogin').classList.toggle('hide', ks !== false);
+        renderRecRooms(d.rooms || []);
+      })
+      .catch(function () { recSetPill('bad', '连不上内核'); });
+  }
+
+  function renderRecRooms(rooms) {
+    if (!rooms.length) {
+      $('recRooms').innerHTML = '<div class="empty">还没有监控对象</div>';
+      return;
+    }
+    var html = '<div class="rooms">';
+    rooms.forEach(function (r) {
+      var st = RSTATUS[r.status] || [r.status || '', 'offline'];
+      var plat = PLAT_NAME[r.platform] || r.platform;
+      var meta = '';
+      if (r.online_count) meta += '在线 ' + r.online_count + ' 人　';
+      if (r.title) meta += r.title;
+      var err = r.last_error
+        ? '<div class="meta"><span class="err">' + esc(r.last_error) + '</span></div>' : '';
+      html += '<div class="room" data-key="' + esc(r.key) + '">' +
+        '<div class="top">' +
+          '<span class="name">' + esc(r.nickname || '未知主播') +
+            '<span class="plat">' + esc(plat) + '</span></span>' +
+          '<span class="tag ' + st[1] + '">' + esc(st[0]) + '</span>' +
+        '</div>' +
+        (meta ? '<div class="meta">' + esc(meta) + '</div>' : '') +
+        err +
+        '<div class="row">' +
+          (r.status === 'recording'
+            ? '<button type="button" class="link" data-stop="' + esc(r.key) + '">停止录制</button>' : '') +
+          '<button type="button" class="link" data-toggle="' + esc(r.key) + '">' +
+            (r.enabled ? '停用' : '启用') + '</button>' +
+          '<button type="button" class="link" data-remove="' + esc(r.key) + '">移除</button>' +
+        '</div>' +
+      '</div>';
+    });
+    html += '</div>';
+    $('recRooms').innerHTML = html;
+  }
+
+  function recEnsure() {
+    var btn = $('recMonitorBtn');
+    btn.disabled = true; $('recPillText').textContent = '正在启动…';
+    fetch('/api/m/rec/ensure', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) { recToast('录制内核已启动', 'ok'); loadRecStatus(); }
+        else recToast(d.error || '启动失败', 'err');
+      })
+      .catch(function () { recToast('启动失败', 'err'); });
+  }
+
+  /* ---------- 录制事件 ---------- */
+  $('recMonitorBtn').addEventListener('click', function () {
+    if (this.textContent === '启动内核') { recEnsure(); return; }
+    var starting = !recRunning;
+    this.disabled = true;
+    fetch('/api/m/rec/monitor/' + (starting ? 'start' : 'stop'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+    }).then(function (r) { return r.json(); })
+      .then(function (d) {
+        recToast(d.message || (starting ? '已启动监控' : '已停止监控'), d.ok ? 'ok' : '');
+        loadRecStatus();
+      })
+      .catch(function () { recToast('操作失败', 'err'); });
+  });
+
+  $('recChips').addEventListener('click', function (e) {
+    var b = e.target.closest('.chip');
+    if (!b) return;
+    recKind = b.getAttribute('data-kind');
+    [].forEach.call(this.querySelectorAll('.chip'), function (c) {
+      c.classList.toggle('on', c === b);
+    });
+    recDetect();
+  });
+  $('recText').addEventListener('input', recDetect);
+
+  $('recAdd').addEventListener('click', function () {
+    var raw = $('recText').value.trim();
+    if (!raw) { recToast('先粘一个直播间链接'); $('recText').focus(); return; }
+    var url = extractUrl(raw);
+    if (!url) { recToast('没找到 http(s) 链接', 'err'); return; }
+    this.disabled = true; this.textContent = '加入中…';
+    fetch('/api/m/rec/rooms/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url, platform: recKind })
+    }).then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) { recToast(d.message || '已加入', 'ok'); $('recText').value = ''; recDetect(); loadRecStatus(); }
+        else recToast(d.error || '加入失败', 'err');
+      })
+      .catch(function () { recToast('加入失败', 'err'); })
+      .then(function () { this.disabled = false; this.textContent = '加入监控'; }.bind(this));
+  });
+
+  $('recRefresh').addEventListener('click', function () { loadRecStatus(); });
+
+  $('recRooms').addEventListener('click', function (e) {
+    var t = e.target.closest('[data-stop],[data-toggle],[data-remove]');
+    if (!t) return;
+    if (t.hasAttribute('data-stop')) {
+      var k = t.getAttribute('data-stop');
+      fetch('/api/m/rec/rooms/stop', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: k }) })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { recToast(d.message || (d.ok ? '已停止' : (d.error || '失败')), d.ok ? 'ok' : 'err'); loadRecStatus(); });
+    } else if (t.hasAttribute('data-toggle')) {
+      var kt = t.getAttribute('data-toggle');
+      fetch('/api/m/rec/rooms/toggle', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: kt, enabled: t.textContent === '启用' }) })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { recToast(d.message || (d.ok ? '已更新' : (d.error || '失败')), d.ok ? 'ok' : 'err'); loadRecStatus(); });
+    } else if (t.hasAttribute('data-remove')) {
+      var kr = t.getAttribute('data-remove');
+      if (!confirm('确定从监控清单移除这个直播间？')) return;
+      fetch('/api/m/rec/rooms/remove', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: kr }) })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { recToast(d.message || (d.ok ? '已移除' : (d.error || '失败')), d.ok ? 'ok' : 'err'); loadRecStatus(); });
+    }
+  });
+
+  $('recKsBtn').addEventListener('click', function () {
+    recToast('已通知电脑弹出扫码窗口，请用手机快手扫码', 'ok');
+    fetch('/api/m/rec/login/start', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      .then(function () { setTimeout(loadRecStatus, 3000); }).catch(function () {});
+  });
+
+  function recTick() {
+    if (currentTab !== 'rec' || document.hidden) { recTimer = setTimeout(recTick, 4000); return; }
+    loadRecStatus().then(function () { recTimer = setTimeout(recTick, 4000); })
+      .catch(function () { recTimer = setTimeout(recTick, 4000); });
+  }
+  recTimer = setTimeout(recTick, 4000);
+})();
+</script>
+</body>
+</html>

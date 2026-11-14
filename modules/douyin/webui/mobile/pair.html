@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>手机下载 · 配对</title>
+<link rel="stylesheet" href="/m/style.css">
+</head>
+<body>
+<div class="wrap pair">
+
+  <header style="justify-content:center">
+    <div class="grow" style="text-align:center">
+      <h1>手机下载</h1>
+      <div class="sub">用手机扫这个码，之后粘链接就能让电脑下载</div>
+    </div>
+  </header>
+
+  <div class="qr"><img id="qrimg" alt="手机扫码打开" src="/api/m/qr.svg"></div>
+
+  <div class="addr" id="addr">—</div>
+  <div class="hint" id="staterow">正在读取状态…</div>
+
+  <div class="rowline">
+    <button type="button" class="ghost" id="copyBtn">复制地址</button>
+    <button type="button" class="ghost" id="localBtn">在本机打开手机版</button>
+  </div>
+
+  <div class="steps">
+    <div><span class="n">1</span>让手机连到<b>和这台电脑同一个 WiFi</b></div>
+    <div><span class="n">2</span>用手机相机/微信<b>扫码</b>，或手动输入上面的地址</div>
+    <div><span class="n">3</span>在手机页面<b>粘一条链接</b>，点「开始下载」</div>
+  </div>
+
+  <div class="notice" id="notice">
+    首次使用如果手机打不开，多半是 Windows 防火墙拦了：请在弹窗里选「允许访问」，
+    或双击工具箱根目录的「允许手机访问.bat」一次性放行。
+  </div>
+
+  <p class="foot">下载的文件保存在<b>这台电脑</b>上：<span id="outdir">—</span></p>
+  <p class="foot">注意：本页开在局域网上，同一个 WiFi 里的其他设备也能打开它并下发下载任务。</p>
+  <p class="foot">关掉这个窗口不会停止服务；下次双击「启动手机下载」会直接复用已在运行的服务。</p>
+
+</div>
+<div id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var cur = '';
+
+  function toast(msg, cls) {
+    var t = $('toast');
+    t.textContent = msg;
+    t.className = 'on' + (cls ? ' ' + cls : '');
+    clearTimeout(t._h);
+    t._h = setTimeout(function () { t.className = ''; }, 2600);
+  }
+
+  function refresh() {
+    fetch('/api/m/info', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var url = d.primary || '';
+        if (url && url !== cur) {
+          cur = url;
+          $('addr').textContent = url;
+          $('qrimg').src = '/api/m/qr.svg?d=' + encodeURIComponent(url) +
+                           '&t=' + Date.now();
+        }
+        var st = d.bridge_ok ? '下载内核已就绪' : '下载内核未就绪 —— ' + (d.bridge_msg || '');
+        $('staterow').innerHTML = '<span style="color:' +
+          (d.bridge_ok ? '#1E7A44' : '#B53532') + '">●</span> ' + st +
+          '　·　服务端口 ' + d.port + '　·　本机 ' + (d.hostname || '');
+        var dirs = d.out_dirs || {};
+        var names = { douyin: '抖音', kuaishou: '快手', direct: '直链' };
+        var lines = [];
+        ['douyin', 'kuaishou', 'direct'].forEach(function (k) {
+          if (dirs[k]) lines.push(names[k] + ' → <code>' + dirs[k] + '</code>');
+        });
+        if (d.free_gb) lines.push('剩余空间 ' + d.free_gb + ' GB');
+        $('outdir').innerHTML = lines.length ? lines.join('<br>') : '（各平台默认目录）';
+        if (d.kuaishou && d.kuaishou.logged_in === false) {
+          $('notice').innerHTML = '快手当前<b>未登录</b>，手机端下快手会失败；' +
+            '请先回到工具箱菜单点「快手扫码登录」扫一次码。' +
+            '<br><br>另外首次使用如果手机打不开，多半是 Windows 防火墙拦了：' +
+            '请在弹窗里选「允许访问」，或双击根目录的「允许手机访问.bat」。';
+        }
+      })
+      .catch(function () {
+        $('staterow').textContent = '读取状态失败';
+      });
+  }
+
+  $('copyBtn').addEventListener('click', function () {
+    var t = $('addr').textContent;
+    if (!t || t === '—') return;
+    var done = function () { toast('地址已复制，去手机浏览器粘贴', 'ok'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(t).then(done, function () { toast('复制失败，请手动选中地址', 'err'); });
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = t; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch (e) { toast('复制失败，请手动选中地址', 'err'); }
+      document.body.removeChild(ta);
+    }
+  });
+
+  $('localBtn').addEventListener('click', function () {
+    window.open('/index.html', '_blank');
+  });
+
+  refresh();
+  setInterval(refresh, 5000);
+})();
+</script>
+</body>
+</html>

@@ -116,6 +116,12 @@ class MainWindow(QMainWindow):
         self._row_keys: List[str] = []
         self._last_alert_at: Optional[datetime] = None
 
+        # 记录 config.json 的 mtime，用于探测「WebUI 侧写进来的外部新增房间」
+        try:
+            self._config_mtime = self.store.path.stat().st_mtime
+        except OSError:
+            self._config_mtime = None
+
         self._build_ui()
         self._build_toolbar()
         self._setup_timer()
@@ -259,8 +265,41 @@ class MainWindow(QMainWindow):
         )
 
     # ------------------------------------------------------------------ 表格
+    def _sync_external_rooms(self) -> None:
+        """把 WebUI 侧写入 config.json 的新监控对象并入当前实例（仅增量，绝不删除）。
+
+        WebUI「识别并分流」/「直播录制」页把直播链接 POST 给桥接服务，桥接服务直接写
+        live_recorder/config.json。若录制器此刻已在运行，它不会自动感知外部改动，
+        于是这里每秒用 mtime 探测一次，发现外部新增就复用 engine.add_room 并入，
+        打通「网页里贴链接 → 桌面录制器立刻出现该房间」的闭环。
+
+        只增不删：删除房间里正在录制的对象会引发停止/合并，风险远大于收益，
+        因此外部删除不在此同步（用户在录制器窗口内删即可）。
+        """
+        try:
+            mtime = self.store.path.stat().st_mtime
+        except OSError:
+            return
+        if self._config_mtime == mtime:
+            return
+        self._config_mtime = mtime
+
+        try:
+            fresh = ConfigStore(self.store.path).load()
+        except Exception:  # noqa: BLE001 - 配置读失败不影响主流程
+            return
+
+        added = 0
+        for entry in fresh.rooms:
+            if self.engine.room_runtime(entry.key) is None:
+                if self.engine.add_room(entry):
+                    added += 1
+        if added:
+            logger.info("检测到外部新增 %d 个监控对象，已自动并入", added)
+
     def _refresh_table(self) -> None:
         """刷新表格与状态栏。"""
+        self._sync_external_rooms()
         try:
             rows = self.engine.snapshot()
         except Exception as exc:  # noqa: BLE001 - 界面刷新不能崩
@@ -704,8 +743,17 @@ class MainWindow(QMainWindow):
             "2. 点击「开始监控」，程序会按设定间隔检测开播状态；<br>"
             "3. 检测到开播后自动以原画画质开始录制，下播后自动停止并合并分片。<br><br>"
             "<b>文件组织</b><br>"
-            "保存路径 / 平台 / 主播昵称 / 日期 / "
-            "平台_主播昵称_YYYYMMDD_HHMMSS_分段序号.flv<br><br>"
+            "保存路径 / 平台 / 主播昵称 /<br>"
+            "分片：平台-主播昵称-日期_时刻-分段序号.flv<br>"
+            "成品：平台-主播昵称-日期_时刻-merged.flv<br><br>"
+            "<b>命名说明</b><br>"
+            "· 日期时间<b>直接写在文件名里</b>（如 2026-08-28_141530），"
+            "不再为日期单独建文件夹；<br>"
+            "· 同一个主播的所有录像都放在同一个文件夹下，按文件名排序即为时间顺序；<br>"
+            "· 同一秒的多场直播靠分段序号与 -2 / -3 去重区分，不会互相覆盖；<br>"
+            "· 昵称识别失败时用「未知主播」占位，目录追加房间号消歧"
+            "（未知主播-房间号），绝不会把房间号伪装成昵称；<br>"
+            "· 同名文件自动追加 -2 / -3 …，<b>任何情况下都不会覆盖已有录像</b>。<br><br>"
             "<b>免责声明</b><br>"
             "本工具仅供个人学习、技术研究与<b>离线备份</b>使用。<br>"
             "请勿用于商业用途，请勿对录制内容进行二次分发；<br>"

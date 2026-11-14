@@ -123,6 +123,7 @@ async def _execute_download(url: str, deps: "_ServerDeps") -> Dict[str, int]:
             "success": result.success,
             "failed": result.failed,
             "skipped": result.skipped,
+            "paid": result.paid,
         }
 
 

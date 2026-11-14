@@ -40,6 +40,7 @@ class DownloadJob:
         self.success = 0
         self.failed = 0
         self.skipped = 0
+        self.paid = 0
         self.error: Optional[str] = None
         self._task: Optional[asyncio.Task] = None
 
@@ -55,6 +56,7 @@ class DownloadJob:
             "success": self.success,
             "failed": self.failed,
             "skipped": self.skipped,
+            "paid": self.paid,
             "error": self.error,
         }
 
@@ -139,6 +141,7 @@ class JobManager:
                 job.success = int(counts.get("success", 0))
                 job.failed = int(counts.get("failed", 0))
                 job.skipped = int(counts.get("skipped", 0))
+                job.paid = int(counts.get("paid", 0))
                 # 只要跑完就是 success；具体成功/失败个数通过字段区分
                 job.status = JobStatus.SUCCESS if job.failed == 0 else JobStatus.FAILED
             except Exception as exc:

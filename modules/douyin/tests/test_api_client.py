@@ -740,9 +740,10 @@ async def test_mix_and_music_endpoints_are_normalized(monkeypatch):
 
 
 class _FakeRedirectResp:
-    def __init__(self, status: int, final_url: str):
+    def __init__(self, status: int, final_url: str, location: str = ""):
         self.status = status
         self.url = final_url
+        self.headers = {"Location": location} if location else {}
 
     async def __aenter__(self):
         return self
@@ -752,13 +753,21 @@ class _FakeRedirectResp:
 
 
 class _FakeSession:
-    def __init__(self, status: int, final_url: str):
+    def __init__(self, status: int, final_url: str, location: str = "", *,
+                 timeout_times: int = 0):
         self._status = status
         self._final_url = final_url
+        self._location = location
+        self._timeout_times = timeout_times
+        self.calls: List[bool] = []
         self.closed = False
 
     def get(self, url, allow_redirects=True, timeout=None, proxy=None):
-        return _FakeRedirectResp(self._status, self._final_url)
+        self.calls.append(allow_redirects)
+        if self._timeout_times > 0:
+            self._timeout_times -= 1
+            raise asyncio.TimeoutError()
+        return _FakeRedirectResp(self._status, self._final_url, self._location)
 
     async def close(self):
         self.closed = True
@@ -766,10 +775,49 @@ class _FakeSession:
 
 @pytest.mark.asyncio
 async def test_resolve_short_url_returns_final_url_on_200():
+    """短链没有 302（200 页面 / JS 跳转）时，回退到跟随重定向。"""
     client = DouyinAPIClient({"msToken": "t"})
     client._session = _FakeSession(200, "https://www.douyin.com/video/123")
     resolved = await client.resolve_short_url("https://v.douyin.com/abc")
     assert resolved == "https://www.douyin.com/video/123"
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_resolve_short_url_reads_location_without_following():
+    """正常短链只回 302 + Location：只发一次请求，不跟到分享页。"""
+    client = DouyinAPIClient({"msToken": "t"})
+    session = _FakeSession(302, "https://v.douyin.com/abc",
+                           location="https://www.douyin.com/video/456")
+    client._session = session
+    resolved = await client.resolve_short_url("https://v.douyin.com/abc")
+    assert resolved == "https://www.douyin.com/video/456"
+    assert session.calls == [False]      # 只请求一次，且不跟随重定向
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_resolve_short_url_retries_after_timeout():
+    """CDN 抖动导致首次超时时要自动重试，而不是直接判失败。"""
+    client = DouyinAPIClient({"msToken": "t"})
+    session = _FakeSession(302, "https://v.douyin.com/abc",
+                           location="https://www.douyin.com/video/789",
+                           timeout_times=2)
+    client._session = session
+    resolved = await client.resolve_short_url("https://v.douyin.com/abc")
+    assert resolved == "https://www.douyin.com/video/789"
+    assert len(session.calls) == 3      # 两次超时 + 第三次成功
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_resolve_short_url_returns_none_after_all_attempts_timeout():
+    client = DouyinAPIClient({"msToken": "t"})
+    session = _FakeSession(302, "https://v.douyin.com/abc", timeout_times=5)
+    client._session = session
+    resolved = await client.resolve_short_url("https://v.douyin.com/abc")
+    assert resolved is None
+    assert len(session.calls) == 3      # 默认最多 3 次
     await client.close()
 
 

@@ -46,10 +46,16 @@ class VideoDownloader(BaseDownloader):
                 self._progress_advance_item("skipped", str(aweme_id))
             return result
 
-        success = await self._download_aweme(aweme_data)
+        outcome: Dict[str, str] = {}
+        success = await self._download_aweme(aweme_data, outcome=outcome)
         if success:
             result.success += 1
             self._progress_advance_item("success", str(aweme_id))
+        elif outcome.get("status") == "paid":
+            # 付费/会员内容：抖音只给 CENC 密文，下不下来是预期内的，
+            # 单独记一桶，别让单作品下载也报「失败」。
+            result.paid += 1
+            self._progress_advance_item("paid", str(aweme_id))
         else:
             result.failed += 1
             self._progress_advance_item("failed", str(aweme_id))
@@ -61,7 +67,9 @@ class VideoDownloader(BaseDownloader):
         author_name = author.get("nickname", "unknown")
         return await self._collect_comments_for_existing_aweme(aweme_data, author_name)
 
-    async def _download_aweme(self, aweme_data: Dict[str, Any]) -> bool:
+    async def _download_aweme(
+        self, aweme_data: Dict[str, Any], outcome: Dict[str, str] = None
+    ) -> bool:
         author = aweme_data.get("author", {}) or {}
         author_name = author.get("nickname", "unknown")
         # Cache author on the hosting job so JobRow can display the nickname
@@ -70,4 +78,4 @@ class VideoDownloader(BaseDownloader):
             nickname=author_name if author_name != "unknown" else None,
             sec_uid=author.get("sec_uid"),
         )
-        return await self._download_aweme_assets(aweme_data, author_name)
+        return await self._download_aweme_assets(aweme_data, author_name, outcome=outcome)

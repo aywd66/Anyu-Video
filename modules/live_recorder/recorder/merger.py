@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 from ..utils.logger import get_logger
 from .ffmpeg_utils import parse_ffmpeg_error, probe_duration, run_ffmpeg
@@ -278,6 +278,69 @@ def _safe_unlink(path: Path) -> None:
 # --------------------------------------------------------------------------
 # 转封装
 # --------------------------------------------------------------------------
+
+# 解码校验时判定「数据损坏」的关键词。B 帧重排产生的 dts 单调性警告是无害的，
+# 不在此列；只有真正的码流损坏（Invalid NAL / corrupt / 解码失败）才算数。
+_DECODE_ERROR_KEYWORDS = (
+    "invalid nal",
+    "error while decoding",
+    "corrupt",
+    "missing picture",
+    "invalid data found",
+    "missing pps",
+    "no frame",
+)
+
+
+def verify_decodable(
+    path: str | Path,
+    ffmpeg_path: str = "ffmpeg",
+    timeout: Optional[float] = None,
+) -> Tuple[bool, str]:
+    """对已转封装的文件做**完整解码**校验，确认码流无损坏。
+
+    背景：某些直播平台（如快手）的私有 metadata 会在 ``-c copy`` 转封装成 MP4 时
+    被 ffmpeg 错误写进视频数据区，导致样本索引与实际 H.264 数据错位。这种损坏
+    转封装命令本身返回 0、不报任何错，文件头也正常，只有**实际解码**才会在
+    错位点报 ``Invalid NAL unit size`` 等错误。
+
+    因此转封装成功后必须做一次完整解码，确认能从头播到尾；有损坏则判定失败。
+
+    返回 ``(是否通过, 错误摘要)``。错误摘要在通过时为空串。
+    """
+    code, output = run_ffmpeg(
+        [
+            "-hide_banner",
+            "-v", "error",
+            # 必须单线程解码：多线程（帧级并行）遇到码流错位时会漏报错误，
+            # 把损坏文件误判为完好（实测同一文件多线程 0 错误、单线程数百条）。
+            "-threads", "1",
+            "-i", str(path),
+            "-f", "null",
+            "-",
+        ],
+        ffmpeg_path=ffmpeg_path,
+        timeout=timeout,
+    )
+
+    # ffmpeg 异常（超时 / 执行失败）：无法确认文件完好，一律判为校验不通过，
+    # 交给调用方保留原文件，避免「校验没跑成却放行」的假绿灯。
+    if code < 0:
+        return False, f"解码校验异常：{output or 'ffmpeg 无法执行'}"
+
+    # 排除 B 帧重排导致的 dts 单调性警告（正常现象，不是损坏）
+    cleaned = "\n".join(
+        line
+        for line in output.splitlines()
+        if "non monotonically increasing dts" not in line
+        and "non-monotonous dts" not in line
+    )
+    lowered = cleaned.lower()
+    if any(keyword in lowered for keyword in _DECODE_ERROR_KEYWORDS):
+        return False, parse_ffmpeg_error(cleaned)
+    return True, ""
+
+
 def remux_to_mp4(
     source: str | Path,
     target: Optional[str | Path] = None,
@@ -313,7 +376,19 @@ def remux_to_mp4(
     )
 
     if code == 0 and dst.exists() and dst.stat().st_size > 0:
-        logger.info("转封装完成：%s", dst.name)
+        # 转封装命令返回 0 只说明「写出了一个 MP4」，不代表码流没有错位 ——
+        # 快手的私有 metadata 会在 -c copy 转封装时被塞进视频数据区，
+        # 只有完整解码才能发现（见 verify_decodable 的说明）。
+        ok, verify_err = verify_decodable(dst, ffmpeg_path=ffmpeg_path)
+        if not ok:
+            logger.warning(
+                "转封装产物解码校验失败，删除损坏 MP4 并保留原文件 %s：%s",
+                src.name,
+                verify_err,
+            )
+            _safe_unlink(dst)
+            return None
+        logger.info("转封装完成并通过解码校验：%s", dst.name)
         return dst
 
     logger.warning("转封装 MP4 失败：%s", parse_ffmpeg_error(output_text))

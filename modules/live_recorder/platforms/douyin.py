@@ -65,6 +65,57 @@ class DouyinParser(BaseLiveParser):
         self._rid_cache: Dict[str, str] = {}
         # 已注入会话的 Cookie（避免重复注入）
         self._applied_cookie = ""
+        # 浏览器兜底期间解析到的昵称：room_id -> nickname。
+        # 接口昵称缺失时用它补位，避免文件名退化成房间号。
+        self._browser_nickname: Dict[str, str] = {}
+
+    #: 抖音页面标题里需要剥掉的站点后缀
+    _TITLE_SUFFIXES = (
+        " - 抖音直播",
+        "-抖音直播",
+        " - 抖音",
+        "抖音直播",
+        " - Douyin Live",
+        "- Douyin Live",
+        "Douyin Live",
+        " - Douyin",
+    )
+    #: 这些标题代表错误页/未开播/site 名，不能当昵称
+    _TITLE_REJECT_MARKERS = (
+        "抖音直播",
+        "抖音-",
+        "登录",
+        "验证",
+        "出错",
+        "页面不存在",
+        "已结束",
+        "未开播",
+        "Douyin Live",
+    )
+
+    @classmethod
+    def _nickname_from_title(cls, title: str) -> str:
+        """从页面标题里尽力切出主播昵称（形如 ``某某的直播间 - 抖音直播``）。"""
+        text = (title or "").strip()
+        if not text:
+            return ""
+        for suffix in cls._TITLE_SUFFIXES:
+            if text.endswith(suffix):
+                text = text[: -len(suffix)].strip()
+                break
+        if not text:
+            return ""
+        text = re.sub(r"(的直播间|直播间|的主页|直播中)\s*$", "", text).strip()
+        if not text or "http" in text.lower() or len(text) > 60:
+            return ""
+        # 剥完后缀后若仍与站点名相同，说明没拿到昵称
+        if any(marker in text for marker in cls._TITLE_REJECT_MARKERS):
+            return ""
+        return text
+
+    def browser_nickname(self, room_id: str) -> str:
+        """返回浏览器兜底期间解析到的昵称（无则空串）。"""
+        return self._browser_nickname.get(str(room_id), "")
 
     HOME_URL = "https://live.douyin.com/"
     WEB_ENTER_API = "https://live.douyin.com/webcast/room/web/enter/"
@@ -432,10 +483,13 @@ class DouyinParser(BaseLiveParser):
             room_node = dig(payload, "data", "data", 0) or {}
         user_node = dig(payload, "data", "user") or {}
 
-        # 昵称：优先 room.owner.nickname，其次 user.nickname
+        # 昵称：优先 room.owner.nickname，其次 user.nickname，
+        # 最后退回浏览器兜底时从页面标题解析到的昵称
+        # （接口偶尔只返回房间数据、不带 owner 节点）。
         room.nickname = str(
             dig(room_node, "owner", "nickname")
             or dig(user_node, "nickname")
+            or self.browser_nickname(room.room_id)
             or room.nickname
             or ""
         )
@@ -620,6 +674,7 @@ class DouyinParser(BaseLiveParser):
                 )
                 cookies = session.cookies_dict()
                 final_url = session.final_url()
+                page_title = session.page_title()
         except PlaywrightUnavailable as exc:
             logger.warning("Playwright 兜底不可用：%s", exc)
             return None
@@ -637,6 +692,12 @@ class DouyinParser(BaseLiveParser):
 
         if not urls:
             return None
+
+        # 顺手记录页面标题解析出的昵称（抖音标题形如「某某的直播间 - 抖音直播」），
+        # 供 check_live 在接口昵称为空时补位。落地校验已通过，采信是安全的。
+        nickname = self._nickname_from_title(page_title)
+        if nickname:
+            self._browser_nickname[room_id] = nickname
 
         # urls 已按可信度排序（media 资源类型优先），直接取第一个
         target = urls[0]

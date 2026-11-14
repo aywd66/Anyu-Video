@@ -157,6 +157,13 @@ class SettingsDialog(QDialog):
         self._mp4_check = QCheckBox("录制完成后转封装为 MP4（-c copy，不重编码）")
         form.addRow("", self._mp4_check)
 
+        self._keep_orig_check = QCheckBox("同时保留原始 FLV 文件")
+        self._keep_orig_check.setToolTip(
+            "取消勾选则「只保留 MP4」，转封装成功后自动删除中间的 FLV，节省约一半空间。\n"
+            "仅在上面的 MP4 转封装成功且文件有效时才会删除；转封装失败会原样保留 FLV。"
+        )
+        form.addRow("", self._keep_orig_check)
+
         note = QLabel(
             "录制全程使用 <code>-c copy</code> 直存原始流，不转码，画质无损且几乎不占 CPU。\n"
             "输出容器按流类型自动选择：FLV 流存为 .flv，HLS 流存为 .ts。"
@@ -429,6 +436,10 @@ class SettingsDialog(QDialog):
         self._max_duration_spin.setValue(config.max_duration_minutes)
         self._max_record_spin.setValue(config.max_concurrent_recordings)
         self._mp4_check.setChecked(config.convert_to_mp4)
+        self._keep_orig_check.setChecked(getattr(config, "keep_original_after_mp4", True))
+        # 保留原始文件只在勾了转封装时才有意义，未勾则禁用（避免误解）
+        self._keep_orig_check.setEnabled(config.convert_to_mp4)
+        self._mp4_check.toggled.connect(self._keep_orig_check.setEnabled)
 
         self._reconnect_spin.setValue(config.reconnect_interval)
         self._stall_spin.setValue(config.stall_timeout)
@@ -479,6 +490,7 @@ class SettingsDialog(QDialog):
         config.max_duration_minutes = self._max_duration_spin.value()
         config.max_concurrent_recordings = self._max_record_spin.value()
         config.convert_to_mp4 = self._mp4_check.isChecked()
+        config.keep_original_after_mp4 = self._keep_orig_check.isChecked()
 
         config.reconnect_interval = self._reconnect_spin.value()
         config.stall_timeout = self._stall_spin.value()

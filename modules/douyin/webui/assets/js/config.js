@@ -12,8 +12,8 @@
 
   window.DYConfig = {
     APP: {
-      name: 'Douzy',            // 品牌字标（跟随官方桌面端命名）
-      fullName: '抖音下载器',
+      name: '视频下载工具箱',      // 品牌字标（2026-11-07 与桌面端统一）
+      fullName: '视频下载工具箱',
       envLabel: 'WEB',          // 侧边栏 Logo 上方的小标签
       version: 'V1.0',          // 底部版本条
     },
@@ -23,26 +23,36 @@
       /* 顶部导航（合并后的工作台首页在首位，作为默认页） */
       platforms: [
         { id: 'planc-home', label: '工作台',    icon: 'bolt',     dot: 'amber', default: true, sub: '合并首页 · 环境健康与概览' },
-        { id: 'douyin',     label: '抖音下载',  icon: 'tiktok',   dot: 'pink',  sub: '视频 · 图集 · 主页 · 合集' },
-        { id: 'tiktok',     label: 'TikTok',    icon: 'globe',    dot: 'cyan',  sub: 'Video · Photo · Profile' },
-        { id: 'youtube',    label: 'YouTube',   icon: 'youtube',  dot: 'red',   sub: 'Videos · Shorts · Playlists' },
+        { id: 'douyin',     label: '抖音下载',  icon: 'tiktok',   dot: 'pink',  sub: '任务与产物管理 · 粘贴链接请到启动台' },
+        { id: 'bilibili',   label: '哔哩哔哩',  icon: 'play',     dot: 'cyan',  sub: 'bilibili.com / b23.tv 在启动台粘贴 · 自动路由' },
+        { id: 'tiktok',     label: 'TikTok',    icon: 'globe',    dot: 'cyan',  sub: '在启动台粘贴 · 自动路由到下载' },
+        { id: 'youtube',    label: 'YouTube',   icon: 'youtube',  dot: 'red',   sub: '在启动台粘贴 · 自动路由到下载' },
       ],
-      /* 顶部菜单（方案C 顶栏五项 + 设置） */
+      /* 顶部菜单（方案C 顶栏五项 + 设置）
+       * topnav:false = 不在顶栏渲染按钮，但条目保留 —— router.js 靠这里的
+       * id 查页面元数据（面包屑）。douyin 与平台区的「抖音下载」按钮互为镜像，
+       * 两处都放会把顶栏撑到必截断（根因：菜单总宽 > 顶栏可用宽，flex 压扁
+       * 组容器后被 overflow 裁字，症状是「任务/多链排队只显示半个词」）。 */
       menu: [
-        { id: 'douyin',    label: '抖音下载',    icon: 'download', group: '下载' },
+        { id: 'launch',    label: '启动台',      icon: 'bolt',     group: '下载' },
         { id: 'queue',     label: '多链排队',    icon: 'layers',   group: '下载' },
+        { id: 'live',      label: '直播流录制',  icon: 'radio',    group: '下载' },
         { id: 'tasks',     label: '任务中心',    icon: 'tasks',    group: '记录', badge: true },
         { id: 'archive',   label: '任务记录',    icon: 'clock',    group: '记录' },
         { id: 'creators',  label: '关注管理',    icon: 'users',    group: '记录' },
         { id: 'favorites', label: '收藏与喜欢',  icon: 'bookmark', group: '记录' },
         { id: 'settings',  label: '设置',        icon: 'settings', group: '系统' },
+        /* 元数据项（不出现在侧栏）：router 靠 id 查页面标题做面包屑；
+         * douyin 平台页（任务/产物管理）从首页模块卡进入。 */
+        { id: 'douyin',    label: '抖音下载',    icon: 'download', group: '下载', side: false },
       ],
       /* 平台页与菜单项互为镜像时，菜单显示的平台归属 */
-      platformLabel: { douyin: '抖音', tiktok: 'TikTok', youtube: 'YouTube' },
+      platformLabel: { douyin: '抖音', bilibili: '哔哩哔哩', tiktok: 'TikTok', youtube: 'YouTube' },
       /* 各平台账号卡文案（侧边栏随平台切换；工作台首页无账号概念，回退到抖音文案） */
       account: {
         'planc-home': { name: '本地工作台', meta: '数据就绪', metaTone: 'green', icon: 'bolt' },
         douyin:  { name: '抖音账号',   meta: '已登录',           metaTone: 'green', icon: 'users' },
+        bilibili:{ name: '哔哩哔哩',   meta: '游客可用 · 登录更清晰', metaTone: 'cyan', icon: 'play' },
         tiktok:  { name: 'TikTok',     meta: '公开内容无需登录', metaTone: 'cyan',  icon: 'globe' },
         youtube: { name: 'YouTube 账号', meta: '已验证',          metaTone: 'green', icon: 'youtube' },
       },
@@ -85,6 +95,13 @@
       { id: 'video',    label: '视频 MP4' },
       { id: 'audio',    label: '音频 MP3' },
       { id: 'subtitle', label: '仅字幕' },
+    ],
+
+    /* —— 哔哩哔哩 下载格式选项（仅单作品/主页生效；直播间恒为录制） —— */
+    BILI_FORMAT: [
+      { id: 'video', label: '视频 MP4' },
+      { id: 'audio', label: '音频 MP3' },
+      { id: 'posts', label: '图文' },
     ],
 
     /* —— 作者目录命名方式（设置页） —— */
@@ -139,6 +156,20 @@
         options: ['ytFormat', 'number', 'quality'],
         sample: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ',
       },
+      bilibili: {
+        name: '哔哩哔哩',
+        accent: 'cyan',
+        crumb: '哔哩哔哩 · Download',
+        cardLabel: '哔哩哔哩 URL',
+        titleA: '粘贴 B 站链接，',
+        titleB: '自动识别开始。',
+        sub: '单作品（视频/音频/图文）、UP 主主页批量投稿、直播间录制，链接类型自动识别。',
+        placeholder: 'https://www.bilibili.com/video/… 或 space.bilibili.com/… 或 live.bilibili.com/…',
+        accepts: '视频 · 音频 · 图文 · UP 主主页 · 直播间',
+        tips: '支持 b23.tv 短链；在「设置」页配置 B 站 Cookie 可解锁更高清晰度并降低风控拦截。',
+        options: ['biliFormat', 'number'],
+        sample: 'https://www.bilibili.com/video/BV1GJ411x7h7',
+      },
     },
 
     /* —— 设置页表单 schema（加一项设置 = 加一个字段，页面自动渲染） —— */
@@ -146,9 +177,10 @@
       {
         group: '下载',
         fields: [
-          { key: 'path', type: 'text', label: '保存目录', desc: '相对路径基于工程根目录', mono: true },
+          { key: 'path', type: 'text', label: '保存目录', desc: '见下方「存储位置」面板（改它会搬移已有产物）', mono: true, readOnly: true },
           { key: 'thread', type: 'number', label: '并发线程数', min: 1, max: 16 },
           { key: 'retry_times', type: 'number', label: '失败重试次数', min: 0, max: 10 },
+          { key: 'browser_fallback.early_stop_known', type: 'number', label: '增量扫描早停（连续已知条数，0=关）', min: 0, max: 1000 },
           { key: 'rate_limit', type: 'number', label: '速率限制（请求/秒）', min: 1, max: 20 },
           { key: 'video_quality', type: 'select', label: '视频画质', options: 'QUALITY' },
           { key: 'video', type: 'switch', label: '保存视频本体' },
@@ -162,12 +194,34 @@
         group: '增量与去重',
         fields: [
           { key: 'database', type: 'switch', label: '启用 SQLite 记录', desc: '增量下载依赖数据库' },
-          { key: 'database_path', type: 'text', label: '数据库文件', mono: true },
-          { key: 'redownload_missing_files', type: 'switch', label: '磁盘文件缺失时重新下载' },
-          { key: 'increase_post', type: 'switch', label: '作品模式增量下载' },
-          { key: 'increase_like', type: 'switch', label: '喜欢模式增量下载' },
-          { key: 'increase_mix', type: 'switch', label: '合集模式增量下载' },
-          { key: 'increase_music', type: 'switch', label: '音乐模式增量下载' },
+          { key: 'database_path', type: 'text', label: '数据库文件', mono: true, desc: '改后需重启下载器才按新路径读取（相对路径按下载器工作目录解析）' },
+          {
+            key: 'redownload_missing_files', type: 'switch',
+            label: '文件被删后重新下载',
+            desc: '关（默认）：下载过的作品一律跳过 —— 本地文件被删了也算「下过」，' +
+                  '重新下载该作者时不会再拉一遍。' +
+                  '开：磁盘文件缺失时重新下载（把删文件当成「想再要一份」）。' +
+                  '判据是数据库里的下载记录，所以「启用 SQLite 记录」关掉时该开关无效。',
+          },
+          { key: 'increase.post', type: 'switch', label: '作品模式增量下载' },
+          { key: 'increase.like', type: 'switch', label: '喜欢模式增量下载' },
+          { key: 'increase.mix', type: 'switch', label: '合集模式增量下载' },
+          { key: 'increase.music', type: 'switch', label: '音乐模式增量下载' },
+          {
+            key: 'creators_update_limit', type: 'number', label: '一键更新每人取最新',
+            min: 0, max: 9999,
+            desc: '「关注管理 → 一键更新」时每位作者检查最新多少个作品，已下过的自动跳过。' +
+                  '0 = 不限（扫到没有新的为止，最保险但作者作品多时慢）。' +
+                  '别设太小：一次新增的数量超过这个数时，排在窗口外的作品以后每次都扫不到' +
+                  '（不是这次漏，是永久漏）。',
+          },
+          {
+            key: 'creators_update_quality', type: 'select', label: '一键更新专用画质',
+            options: 'QUALITY', blankLabel: '留空 = 用原画（推荐）',
+            desc: '留空 = 默认用「原画」（抖音最高转码档常不是作者原片）。' +
+                  '选了某一档就只用于「关注管理 → 一键更新」，不影响其它下载。' +
+                  '原画每条作品多一次探测请求，会慢一些。',
+          },
         ],
       },
       {
@@ -175,26 +229,69 @@
         fields: [
           { key: 'folderstyle', type: 'switch', label: '按日期建立子目录' },
           { key: 'author_dir', type: 'select', label: '作者目录命名', options: 'AUTHOR_DIR', desc: '切换只影响后续下载，不迁移已有目录' },
-          { key: 'filename_template', type: 'text', label: '文件名模板', mono: true, desc: '可用变量：{date} {title} {id} {author} {type}' },
+          { key: 'filename_template', type: 'text', label: '文件名模板', mono: true,
+            desc: '可用变量：{date}＝下载日期 · {title}＝作品标题 · {id}＝作品编号 · {author}＝作者昵称 · {type}＝作品类型（video 视频 / gallery 图集）' },
           { key: 'download_pinned', type: 'switch', label: '包含置顶作品' },
         ],
       },
       {
         group: '网络与兜底',
         fields: [
-          { key: 'proxy', type: 'text', label: '代理地址', placeholder: 'http://127.0.0.1:7890', mono: true },
-          { key: 'browser_fallback', type: 'switch', label: '启用浏览器兜底', desc: 'API 翻页受限时自动启动浏览器' },
-          { key: 'browser_headless', type: 'switch', label: '浏览器无头模式' },
-          { key: 'notifications_enabled', type: 'switch', label: '下载完成推送通知', desc: 'Bark / Telegram / Webhook，在 config.yml 里配置具体通道' },
+          { key: 'proxy', type: 'text', label: '代理地址', placeholder: 'http://127.0.0.1:7890', mono: true, desc: '改后下次下载任务生效；留空表示直连' },
+          { key: 'browser_fallback.enabled', type: 'switch', label: '启用浏览器兜底', desc: 'API 翻页受限时自动启动浏览器' },
+          { key: 'browser_fallback.headless', type: 'switch', label: '浏览器无头模式' },
+          { key: 'notifications.enabled', type: 'switch', label: '下载完成推送通知', desc: 'Bark / Telegram / Webhook，在 config.yml 里配置具体通道' },
         ],
       },
     ],
+
+    /* —— 设置项默认值 ——
+     * ⚠️ 2026-10-03 补上的：`store.js` 的 `resetSettings()` 与 `settings.js` 的
+     *    「数字输入失焦回退」都读 `DYConfig.DEFAULT_SETTINGS[key]`，但这个对象
+     *    **从来没定义过** → 读 undefined 的属性会抛 TypeError。表现是：在设置页
+     *    把任何数字框清空再失焦，整页 JS 直接崩掉。
+     *    取值与 `modules/douyin/config.example.yml` 保持一致（工程权威默认）。
+     */
+    DEFAULT_SETTINGS: {
+      path: './Downloaded/',
+      thread: 5,
+      retry_times: 3,
+      rate_limit: 5,
+      video_quality: 'highest',
+      video: true,
+      music: false,
+      cover: false,
+      avatar: false,
+      json: false,
+      database: true,
+      database_path: 'dy_downloader.db',
+      redownload_missing_files: false,
+      'increase.post': true,
+      'increase.like': true,
+      'increase.mix': true,
+      'increase.music': true,
+      folderstyle: true,
+      author_dir: 'nickname',
+      filename_template: '{date}_{title}_{id}',
+      download_pinned: false,
+      proxy: '',
+      'browser_fallback.enabled': true,
+      'browser_fallback.headless': false,
+      'notifications.enabled': false,
+      /* 「关注管理 → 一键更新」每位作者取最新多少个作品。0 = 不限（扫到没有新的为止）。
+       * ⚠️ 2026-10-03 新增。此前这个值在 creators.js 里写死 20，导致：
+       *   作者一次新增超过 20 个作品时，排在第 21 位以后的**永远扫不到** ——
+       *   不是这一次没扫到，是以后每次都只取最新 20 个，那几个永远在窗口外。
+       *   静默丢片，且没有任何提示。默认值给 30（见下方 desc 的取舍说明）。 */
+      creators_update_limit: 30,
+    },
 
     /* —— 任务状态 —— */
     TASK_STATUS: {
       pending:  { label: '排队中', tone: 'muted' },
       running:  { label: '下载中', tone: 'cyan' },
       success:  { label: '已完成', tone: 'green' },
+      braked:   { label: '守卫刹车', tone: 'amber' },
       failed:   { label: '失败',   tone: 'red' },
       canceled: { label: '已取消', tone: 'faint' },
       'muted-done': { label: '无新增', tone: 'faint' },

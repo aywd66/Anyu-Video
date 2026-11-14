@@ -17,12 +17,20 @@
       this.routes[id] = renderFn;
     },
 
-    /** 当前 hash 里的页面 id（非法时回默认页） */
+    /** 当前 hash 里的页面 id（非法时回默认页）
+     *
+     * 支持子路径：'launch/douyin' 这类带斜杠的 hash，按第一段
+     * 落到已注册的 'launch' 路由，页面自己再读完整 hash 决定渲染哪个子视图。
+     * 之所以不做成注册表里的新条目：子视图是同一张页面的不同切片，
+     * 让路由表为每个切片各留一条会把它撑成「页面 × 参数」的笛卡尔积。
+     * 已有路由全是单段，故这一层回退对它们是零影响。 */
     parse() {
       const raw = (location.hash || '').replace(/^#\/?/, '').split('?')[0];
       const def = window.DYConfig.NAV.platforms.find((n) => n.default).id;
-      const id = raw || def;
-      return this.routes[id] ? id : def;
+      if (this.routes[raw]) return raw;
+      const head = raw.split('/')[0];
+      if (head && this.routes[head]) return head;
+      return def;
     },
 
     /** 主动跳转 */

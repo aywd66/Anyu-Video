@@ -63,10 +63,17 @@ class MusicDownloader(BaseDownloader):
                 return result
 
             aweme_author = (aweme.get("author") or {}).get("nickname", "music")
-            success = await self._download_aweme_assets(aweme, aweme_author, mode="music")
+            outcome: Dict[str, str] = {}
+            success = await self._download_aweme_assets(
+                aweme, aweme_author, mode="music", outcome=outcome
+            )
             if success:
                 result.success += 1
                 self._progress_advance_item("success", str(aweme.get("aweme_id")))
+            elif outcome.get("status") == "paid":
+                # 付费/会员内容：CENC 密文解不开，记「付费跳过」而不是失败
+                result.paid += 1
+                self._progress_advance_item("paid", str(aweme.get("aweme_id")))
             else:
                 result.failed += 1
                 self._progress_advance_item("failed", str(aweme.get("aweme_id")))
@@ -177,6 +184,7 @@ class MusicDownloader(BaseDownloader):
                     "file_path": str(save_dir),
                     "metadata": json.dumps(detail or {}, ensure_ascii=False),
                     "job_id": self.job_id or "",
+                    "origin": self.origin or "",
                 },
                 author_sec_uid=author_sec_uid,
             )

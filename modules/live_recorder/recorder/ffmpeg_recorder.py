@@ -39,10 +39,12 @@ from ..utils.logger import get_logger
 from .ffmpeg_utils import parse_ffmpeg_error, resolve_ffmpeg
 from .merger import merge_segments, remux_to_mp4
 from .storage import (
+    SessionNaming,
     build_merged_path,
-    build_output_dir,
+    build_output_dir_from_naming,
     build_segment_path,
     get_free_space_gb,
+    make_session_naming,
 )
 
 logger = get_logger(__name__)
@@ -156,6 +158,12 @@ class StreamRecorder:
         # 录制产物
         self._session_start: datetime = datetime.now()
         self._output_dir: Path = Path(config.save_path)
+        # 本场直播的命名快照：在 start() 时冻结，之后所有分片/合并共用，
+        # 保证「一场直播 = 一个目录 + 一套文件名前缀」。
+        # 注意：room.nickname 可能在录制过程中被平台回填，若每个分片都重新取
+        # 昵称，同一场直播的分片会散落到不同目录，因此必须冻结。
+        # 必须在 _session_start 之后构造（命名快照含起始时间）。
+        self._session_naming: SessionNaming = self._make_session_naming()
         self._segments: List[_SegmentRecord] = []
         self._current_path: Optional[Path] = None
         self._segment_index = 0
@@ -199,7 +207,7 @@ class StreamRecorder:
                 recorded += max(0.0, time.monotonic() - self._current_segment_start)
             return RecorderStats(
                 state=self._state,
-                nickname=self.room.nickname,
+                nickname=self.room.nickname or self._session_naming.nickname,
                 platform=self.room.platform,
                 segment_count=len(self._segments) + (1 if self._current_path else 0),
                 total_bytes=total,
@@ -221,6 +229,9 @@ class StreamRecorder:
             self._stop_reason = ""
             self._reconnect_attempts = 0
             self._session_start = datetime.now()
+            # 冻结本场命名：此刻的昵称/房间号即本场唯一命名依据，
+            # 之后 room.nickname 被回填也不会影响已开始的这一场。
+            self._session_naming = self._make_session_naming()
             self._segments.clear()
             self._segment_index = 0
             self._recorded_seconds = 0.0
@@ -259,7 +270,7 @@ class StreamRecorder:
             logger.info(
                 "[开始录制] %s「%s」-> %s",
                 self._platform_label(),
-                self.room.nickname or self.room.room_id,
+                self._display_name(),
                 self._output_dir,
             )
             self._record_loop()
@@ -272,13 +283,45 @@ class StreamRecorder:
         finally:
             self._finalize()
 
-    def _prepare_output_dir(self) -> None:
-        """创建「平台/主播昵称/日期」三级输出目录。"""
-        self._output_dir = build_output_dir(
-            self.config.save_path,
+    def _make_session_naming(self) -> SessionNaming:
+        """由当前房间信息构造命名快照（昵称缺失时回退为「未知主播」）。
+
+        必须传**原始** ``room.nickname``（可能是空串），不能传
+        :meth:`_display_name` —— 后者会把房间号当占位名，导致房间号被写进
+        文件名里的「昵称」分量，正是本次要修掉的问题。
+        """
+        return make_session_naming(
             self.room.platform,
-            self.room.nickname or self.room.room_id,
+            self.room.nickname,
+            self.room.room_id,
             self._session_start,
+        )
+
+    def _display_name(self) -> str:
+        """界面/日志展示用名称。
+
+        优先用平台回填后的最新昵称，其次用本场冻结的命名快照
+        （昵称与房间号都缺失时显示「未知主播」占位，而不是空白）。
+
+        注意：本方法可能在 ``__init__`` 构造命名快照时被间接调用，
+        此时 ``_session_naming`` 尚未赋值，故用 getattr 兜底。
+        """
+        frozen = getattr(self, "_session_naming", None)
+        return (
+            self.room.nickname
+            or (frozen.nickname if frozen is not None else "")
+            or self.room.room_id
+        )
+
+    def _prepare_output_dir(self) -> None:
+        """创建「平台 / 主播昵称」两级输出目录。
+
+        目录名取自**本场冻结的命名快照**，与文件名同源；
+        昵称未识别时目录退化为 ``未知主播-<房间号>``。
+        日期时间写进文件名，**不再**单独建日期目录层。
+        """
+        self._output_dir = build_output_dir_from_naming(
+            self.config.save_path, self._session_naming
         )
 
     def _record_loop(self) -> None:
@@ -291,7 +334,7 @@ class StreamRecorder:
                     "[磁盘不足] 剩余 %.2f GB，低于阈值 %.2f GB，停止录制：%s",
                     free_gb,
                     self.config.min_free_disk_gb,
-                    self.room.nickname,
+                    self._display_name(),
                 )
                 self._emit(
                     EVT_DISK_LOW,
@@ -309,7 +352,7 @@ class StreamRecorder:
                 if self._is_room_unavailable(exc):
                     logger.info(
                         "[结束] %s 平台确认房间不可用，停止重连：%s",
-                        self.room.nickname or self.room.room_id,
+                        self._display_name(),
                         exc,
                     )
                     with self._lock:
@@ -324,7 +367,7 @@ class StreamRecorder:
                     self._last_message = f"取流失败，{self.config.reconnect_interval}s 后重试"
                 logger.warning(
                     "[重连] %s 取流失败（第 %d 次）：%s",
-                    self.room.nickname,
+                    self._display_name(),
                     self._reconnect_attempts,
                     exc,
                 )
@@ -361,7 +404,7 @@ class StreamRecorder:
                 # 进程自然结束通常意味着主播下播；等待一个间隔后由调度层再确认
                 logger.info(
                     "[流结束] %s 拉流自然结束，%d 秒后再次确认状态",
-                    self.room.nickname,
+                    self._display_name(),
                     self.config.reconnect_interval,
                 )
                 if self._stop_event.wait(self.config.reconnect_interval):
@@ -369,7 +412,7 @@ class StreamRecorder:
                 continue
             if reason is _ExitReason.ROTATE:
                 # 达到分卷条件，立即开新分片，不等待
-                logger.info("[分卷] %s 触发分卷，开始新分片", self.room.nickname)
+                logger.info("[分卷] %s 触发分卷，开始新分片", self._display_name())
                 continue
 
             # 4) 卡顿/中断：按重连间隔等待后重试
@@ -382,7 +425,7 @@ class StreamRecorder:
                 self._last_message = f"拉流中断，{self.config.reconnect_interval}s 后重连"
             logger.warning(
                 "[重连] %s 拉流中断（第 %d 次），%d 秒后重连",
-                self.room.nickname,
+                self._display_name(),
                 self._reconnect_attempts,
                 self.config.reconnect_interval,
             )
@@ -400,10 +443,12 @@ class StreamRecorder:
         out_path = build_segment_path(
             self._output_dir,
             self.room.platform,
-            self.room.nickname or self.room.room_id,
+            self._display_name(),
             self._session_start,
             self._segment_index,
             self._container,
+            room_id=self.room.room_id,
+            naming=self._session_naming,   # 复用本场冻结快照，与目录同源
         )
         with self._lock:
             self._current_path = out_path
@@ -415,7 +460,7 @@ class StreamRecorder:
         logger.info(
             "[分片 %03d] %s -> %s",
             self._segment_index,
-            self.room.nickname,
+            self._display_name(),
             out_path.name,
         )
         self._emit(
@@ -462,7 +507,7 @@ class StreamRecorder:
                 summary = parse_ffmpeg_error("\n".join(error_lines))
                 logger.error(
                     "[异常退出] %s ffmpeg 返回码 %s：%s",
-                    self.room.nickname,
+                    self._display_name(),
                     proc.returncode,
                     summary or "无输出",
                 )
@@ -477,7 +522,7 @@ class StreamRecorder:
                 summary = parse_ffmpeg_error("\n".join(error_lines))
                 logger.warning(
                     "[异常退出] %s 首次分片立即结束：%s",
-                    self.room.nickname,
+                    self._display_name(),
                     summary or "无输出",
                 )
                 reason = _ExitReason.ERROR
@@ -552,7 +597,7 @@ class StreamRecorder:
             if max_bytes and size >= max_bytes:
                 logger.info(
                     "[分卷] %s 分片达到 %.2f GB，触发分卷",
-                    self.room.nickname,
+                    self._display_name(),
                     size / 1024 ** 3,
                 )
                 self._terminate_process(graceful=True)
@@ -560,7 +605,7 @@ class StreamRecorder:
             if max_seconds and (now - self._current_segment_start) >= max_seconds:
                 logger.info(
                     "[分卷] %s 分片达到 %d 分钟上限，触发分卷",
-                    self.room.nickname,
+                    self._display_name(),
                     self.config.max_duration_minutes,
                 )
                 self._terminate_process(graceful=True)
@@ -573,7 +618,7 @@ class StreamRecorder:
             elif now - last_growth > stall_timeout:
                 logger.warning(
                     "[卡顿] %s 输出已 %.0f 秒无增长，判定拉流异常，触发重连",
-                    self.room.nickname,
+                    self._display_name(),
                     now - last_growth,
                 )
                 self._terminate_process(graceful=False)
@@ -584,7 +629,7 @@ class StreamRecorder:
             if free_gb < self.config.min_free_disk_gb:
                 logger.error(
                     "[磁盘不足] %s 录制中检测到空间不足（%.2f GB），立即停止",
-                    self.room.nickname,
+                    self._display_name(),
                     free_gb,
                 )
                 self._terminate_process(graceful=True)
@@ -672,7 +717,7 @@ class StreamRecorder:
         final_path: Optional[Path] = None
 
         if not segments:
-            logger.warning("[收尾] %s 本场未产生有效分片，跳过合并", self.room.nickname)
+            logger.warning("[收尾] %s 本场未产生有效分片，跳过合并", self._display_name())
         else:
             with self._lock:
                 self._state = RecorderState.MERGING
@@ -681,9 +726,11 @@ class StreamRecorder:
             merged_target = build_merged_path(
                 self._output_dir,
                 self.room.platform,
-                self.room.nickname or self.room.room_id,
+                self._display_name(),
                 self._session_start,
                 self._container,
+                room_id=self.room.room_id,
+                naming=self._session_naming,   # 成品名与分片名同源
             )
             final_path = merge_segments(
                 segments,
@@ -702,11 +749,20 @@ class StreamRecorder:
 
                 # 可选：转封装为 MP4（-c copy 不重编码）
                 if self.config.convert_to_mp4:
+                    source_path = final_path
                     mp4_path = remux_to_mp4(
-                        final_path, ffmpeg_path=self.config.ffmpeg_path
+                        source_path, ffmpeg_path=self.config.ffmpeg_path
                     )
                     if mp4_path is not None:
                         final_path = mp4_path
+                        # 「只保留 MP4」：转封装成功后再删中间产物 FLV。
+                        #
+                        # 删除放在**确认 MP4 有效之后**，顺序不能反 ——
+                        # remux_to_mp4 只在「返回 0 且目标存在且非空」时才给路径，
+                        # 所以走到这里 FLV 已经可以安全丢弃。
+                        # 失败时它返回 None，final_path 保持指向 FLV，不删任何东西。
+                        if not self.config.keep_original_after_mp4:
+                            self._cleanup_original_after_remux(source_path, mp4_path)
 
         with self._lock:
             self._final_path = final_path
@@ -730,7 +786,7 @@ class StreamRecorder:
         logger.info(
             "[录制结束] %s「%s」%s",
             self._platform_label(),
-            self.room.nickname or self.room.room_id,
+            self._display_name(),
             f"成品：{final_path.name}" if final_path else "未生成文件",
         )
 
@@ -743,6 +799,37 @@ class StreamRecorder:
             logger.debug("已清理 %d 个原始分片", len(segments))
         except OSError as exc:
             logger.warning("清理原始分片失败（不影响成品文件）：%s", exc)
+
+    def _cleanup_original_after_remux(self, source: Path, mp4: Path) -> None:
+        """转封装成功后删除中间产物（FLV），实现「只保留 MP4」。
+
+        安全前提（调用方已保证）：``mp4`` 是 remux_to_mp4 校验过的有效文件
+        （存在且非空），``source`` 与 ``mp4`` 不是同一个文件。
+
+        这里仍做一次独立复核而不是直接 unlink —— 删视频不可逆，
+        宁可多花两次 stat 换取「绝不误删唯一副本」。
+        """
+        try:
+            if source == mp4:
+                logger.warning("源文件与目标同名，跳过清理：%s", source)
+                return
+            if not source.exists():
+                return
+            if not (mp4.exists() and mp4.stat().st_size > 0):
+                logger.warning(
+                    "MP4 尚未确认有效，保留中间产物 %s", source.name
+                )
+                return
+            # 单场直播可达数 GB，删掉就是省一半空间，记 info 便于事后追溯
+            freed = source.stat().st_size
+            source.unlink()
+            logger.info(
+                "已删除中间产物 %s（释放 %.2f GB），只保留 %s",
+                source.name, freed / 1024 ** 3, mp4.name,
+            )
+        except OSError as exc:
+            # 删除失败不影响成品，MP4 已经在了
+            logger.warning("删除中间产物失败（MP4 已生成，不影响使用）：%s", exc)
 
     # ---------------------------------------------------------------- 辅助
     def _exceeded_reconnect_limit(self) -> bool:
@@ -765,7 +852,7 @@ class StreamRecorder:
 
     def _fail(self, message: str) -> None:
         """以错误状态结束录制。"""
-        logger.error("[录制失败] %s：%s", self.room.nickname, message)
+        logger.error("[录制失败] %s：%s", self._display_name(), message)
         with self._lock:
             self._state = RecorderState.ERROR
             self._last_message = message
@@ -775,12 +862,20 @@ class StreamRecorder:
         return PLATFORM_LABELS.get(self.room.platform, self.room.platform)
 
     def _emit(self, event: str, payload: Optional[Dict] = None) -> None:
-        """安全地触发事件回调。"""
+        """安全地触发事件回调。
+
+        统一附带本场命名信息，界面层无需自己拼接：
+        ``nickname`` 永远非空（未识别时为「未知主播」占位）。
+        """
         if self._on_event is None:
             return
         data = dict(payload or {})
         data.setdefault("room_key", self.room.key)
-        data.setdefault("nickname", self.room.nickname)
+        data.setdefault("nickname", self._display_name())
+        data.setdefault("room_id", self.room.room_id)
+        data.setdefault("platform", self.room.platform)
+        data.setdefault("session_started_at", self._session_start.isoformat())
+        data.setdefault("output_dir", str(self._output_dir))
         try:
             self._on_event(event, data)
         except Exception as exc:  # noqa: BLE001 - 回调异常不应影响录制

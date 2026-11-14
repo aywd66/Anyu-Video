@@ -255,6 +255,60 @@ async def test_database_get_conn_reuses_single_connection_under_concurrency(tmp_
     await database.close()
 
 
+@pytest.mark.asyncio
+async def test_add_aweme_records_origin_and_keeps_it_on_upsert(tmp_path):
+    """作品来源（origin）必须落库，且空值不得冲掉已有值。
+
+    这一列是 WebUI「关注」列表的判据：只有存在 origin='user'（主页批量）作品的
+    作者才算关注，单作品链接来的不算。写丢或写空，作者就会凭空出现在关注里
+    （2026-10-30 的需求），所以这里把两条语义都钉住：
+      ① add_aweme / add_aweme_batch 都把 origin 写进去；
+      ② 同一个 aweme 后来被「来源未知」的写入（origin=''）覆盖时保留原值。
+    """
+    database = Database(str(tmp_path / "origin.db"))
+    await database.initialize()
+
+    await database.add_aweme(
+        {
+            "aweme_id": "V1",
+            "aweme_type": "video",
+            "title": "单链接下载的视频",
+            "file_path": "/tmp/v1.mp4",
+            "origin": "video",
+        }
+    )
+    await database.add_aweme_batch(
+        [
+            {
+                "aweme_id": "U1",
+                "aweme_type": "video",
+                "title": "主页批量下载的视频",
+                "file_path": "/tmp/u1.mp4",
+                "origin": "user",
+            }
+        ]
+    )
+
+    db = await database._get_conn()
+
+    async def origin_of(aweme_id):
+        cursor = await db.execute(
+            "SELECT origin FROM aweme WHERE aweme_id = ?", (aweme_id,)
+        )
+        return (await cursor.fetchone())[0]
+
+    assert await origin_of("V1") == "video"
+    assert await origin_of("U1") == "user"
+
+    # 来源未知的重复写入（老调用方 / 同一条作品被别处同步）不得把来源抹掉
+    await database.add_aweme(
+        {"aweme_id": "U1", "aweme_type": "video", "title": "同步来的投影", "file_path": ""}
+    )
+    assert await origin_of("U1") == "user"
+
+    await database.close()
+
+
 # ---------------------------------------------------------------------------
 # Preserving upsert semantics (page-review-improvements Task 3)
 # ---------------------------------------------------------------------------

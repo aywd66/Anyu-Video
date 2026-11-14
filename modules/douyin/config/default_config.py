@@ -42,9 +42,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "collect": 0,
         "collectmix": 0,
     },
-    # 增量下载首先检查磁盘主文件。磁盘缺失时，True 会重新下载；False 会在数据库
-    # 存在有效下载记录（file_path 非空）时继续跳过。默认 True 保持历史行为。
-    "redownload_missing_files": True,
+    # 增量下载首先检查磁盘主文件。磁盘缺失（文件被删/被移动）时：
+    # False = 数据库里仍有该作品的下载记录就继续跳过 —— 也就是「下载过的永远算下过」，
+    #         删除本地文件不会让它被重新下载（默认，符合「已下载自动跳过」的预期）；
+    # True  = 重新下载（旧行为：把删文件当成「想再要一份」）。
+    # 注意：数据库不可用（database: false）或记录已被删除时，没有依据可判，仍会下载。
+    "redownload_missing_files": False,
     # 各模式是否启用增量下载；False 会强制重下并原子覆盖当前筛选范围。
     "increase": {
         "post": True,
@@ -53,9 +56,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "mix": True,
         "music": True,
     },
-    "thread": 5,
+    # 批量下载的并发路数（每个 worker 同一时刻占一条下载连接）。
+    # 5 路在实测里只能跑出 3.3MB/s，16 路稳定到 9~11MB/s（再往上收益递减：
+    # 28 路只多 1.4x）。UI 的「并发线程数」上限也是 16。
+    "thread": 16,
     "retry_times": 3,
     "rate_limit": 2,
+    # 批量任务跑完之后，把记成「失败」的作品再补跑几轮（0 = 关闭）。
+    # 源站/CDN 的短时封禁（实测出现过连续 100 秒全失败、之后自行恢复）不该
+    # 变成本次任务的永久失败；详见 core/downloader_base._recover_failed_items。
+    "failure_retry_passes": 2,
     "proxy": "",
     # 视频下载画质。可选值：
     #   "original" - 原画：探测上传原片（ratio=default，转码档列表之外，可比
@@ -96,6 +106,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_scrolls": 240,
         "idle_rounds": 8,
         "wait_timeout_seconds": 600,
+        # 增量早停：连续 N 条已在本地即停止翻页。40 = 2 屏；0 = 关闭。
+        "early_stop_known": 40,
     },
     # 下载完成通知（可选）。providers 支持 bark / telegram / webhook。
     "notifications": {

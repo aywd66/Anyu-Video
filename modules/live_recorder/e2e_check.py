@@ -299,12 +299,16 @@ def run_douyin(config, record_seconds: float) -> None:
         if final and final.exists():
             rel = final.relative_to(work)
             print(f"     相对路径={rel}")
-            check("输出目录为「平台/主播昵称/日期」三级", len(rel.parts) == 4,
-                  str(Path(*rel.parts[:3])))
-            # 平台在目录与文件名中统一使用中文标签
-            pattern = r"^抖音_.+_\d{8}_\d{6}_\d{3}\.flv$"
-            check("文件名符合 平台_昵称_YYYYMMDD_HHMMSS_分段序号.flv",
+            # 两级目录：平台/昵称（日期已并入文件名，不再单独建目录层）
+            check("输出目录为「平台/主播昵称」两级", len(rel.parts) == 3,
+                  str(Path(*rel.parts[:-1])))
+            # 文件名为 平台-昵称-YYYY-MM-DD_HHMMSS-序号.flv
+            # 昵称可能含横线，用正则锚定「_HHMMSS-序号」结尾而非按 "-" 硬切
+            pattern = r"^抖音-.+-\d{4}-\d{2}-\d{2}_\d{6}-(\d{3}|merged)(-\d+)?\.flv$"
+            check("文件名含日期时间（平台-昵称-日期_时刻-序号.flv）",
                   bool(re.match(pattern, final.name)), final.name)
+            check("日期已并入文件名（YYYY-MM-DD_HHMMSS）",
+                  bool(re.search(r"\d{4}-\d{2}-\d{2}_\d{6}", final.name)), final.name)
 
         # ---- A7 无损转封装 MP4 ----
         if final and final.exists():

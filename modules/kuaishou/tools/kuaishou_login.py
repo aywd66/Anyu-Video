@@ -10,6 +10,16 @@ v2 修复:
 - 任意时刻按 Ctrl+C 退出; 窗口标题变化不影响检测
 """
 import sys, io, os, time, json
+
+# 风控守卫（可选）：登录是「身份刚刚确定」的时刻，正好把「这份 profile 是哪个
+# 设备/哪个号」登记下来，之后所有入口启动时查一次 JSON 就知道自己是谁，
+# 不必再为了读 cookie 去开浏览器。守卫不在也照常登录。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import ks_guard
+except Exception:
+    ks_guard = None
+
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 except Exception:
@@ -26,7 +36,11 @@ def _find_root():
 
 _ROOT = _find_root()
 COOKIE_OUT = os.path.join(_ROOT, "data", "kuaishou", "cookie.txt")
-PROFILE_DIR = os.path.join(_ROOT, "runtime", "kuaishou-login-profile")
+# 登录态落点可被 KS_PROFILE 覆盖：想登第二个账号就指定另一份目录，例如
+#   set KS_PROFILE=E:\录屏\ks-b && python kuaishou_login.py
+# 登录成功后会自动把「这份 profile 是哪个设备/哪个号」登记进 data\kuaishou\idents.json。
+PROFILE_DIR = (os.environ.get("KS_PROFILE")
+               or os.path.join(_ROOT, "runtime", "kuaishou-login-profile"))
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 LOGIN_KEYS = ("passToken", "kuaishou.server.web_st", "kuaishou.server.web_day7_st", "userId")
 
@@ -81,6 +95,19 @@ def main():
                 cookies = ctx.cookies()
                 n = dump_all(cookies)
                 print("[4] 已保存 %d 项 Cookie -> %s" % (n, COOKIE_OUT))
+                # 登记身份：桶 = 设备（did）。同一个 profile 换号登录时 did 不变，
+                # 所以这里顺手把 did/userId 都记下来，`ks_ident.py` 就能直接看。
+                if ks_guard:
+                    _p = ks_guard.ident_parts(cookies)
+                    _b = ks_guard.remember_identity(PROFILE_DIR, cookies)
+                    if _b:
+                        print("[4b] 身份已登记：桶 %s（did=%s… userId=%s）"
+                              % (_b, str(_p.get("did", ""))[:8], _p.get("userId", "?")))
+                        if _p.get("did") and _p.get("userId"):
+                            print("     ⚠️ 桶按 **did（设备）** 算：同一台设备换账号不增加额度；"
+                                  "要真的多一份额度得换 `KS_PROFILE`（新的 device id）。")
+                    else:
+                        print("[4b] 未能读出身份字段（did/userId），本次不登记。")
                 # 二次校验: 页面内 checkLogin
                 try:
                     pg = ctx.pages[0] if ctx.pages else ctx.new_page()

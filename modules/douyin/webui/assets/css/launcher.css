@@ -1,0 +1,223 @@
+/* ============================================================
+ * launcher.css — 启动台（五个 .bat 入口的统一界面）
+ * ------------------------------------------------------------
+ * 原则：不发明任何新视觉语言。
+ *   - 颜色/间距/圆角/动效全部取自 tokens.css，本文件零硬编码色值；
+ *   - 结构沿用既有语汇：.section 去卡片化、.hero 输入口、
+ *     .health-grid 状态行、.log-box 等宽日志、.badge/.dot 三重编码；
+ *   - 只新增"启动台特有"的少量排布（工具横排 tab、就绪行、自检输出）。
+ *
+ * 为什么单独一个文件而不是塞进 components.css：
+ *   启动台是五个独立入口的共享面，与工作台页面无耦合；
+ *   放一起会让 components.css 继续膨胀（已 1275 行），
+ *   也让"这一块是启动器专属"的边界变模糊。
+ * ============================================================ */
+
+/* ---------- 工具切换（启动台内部横向 tab） ----------
+ * 与顶栏 .platform-btn 刻意用不同语汇：
+ * 顶栏切的是「平台」，这里是「工具」，两者同时出现在屏幕上，
+ * 长得一样会让用户分不清点哪个能换到哪里。 */
+.lt-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-4);
+}
+
+.lt-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 34px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-input);
+  background: var(--surface);
+  color: var(--ink-3);
+  font-family: inherit;
+  font-size: var(--fs-small);
+  font-weight: 600;
+  cursor: pointer;
+  transition: color var(--t-fast), border-color var(--t-fast), background-color var(--t-fast);
+}
+
+.lt-tab:hover {
+  color: var(--brand);
+  border-color: var(--brand-line);
+  background: var(--brand-soft);
+}
+
+.lt-tab.is-on {
+  color: var(--brand-ink);
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.lt-tab__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+  /* span 默认 display:inline，宽高不生效 —— 必须显式块化（layout.css 同坑） */
+  display: inline-block;
+  background: var(--ok);
+}
+
+.lt-tab__dot[data-ready="0"] { background: var(--warn); }
+
+/* ---------- 就绪行（工具准备情况） ----------
+ * 复用 .health-grid 的排版节奏，但多一列"操作"。
+ * 之所以不复用 .health-item：那个是纯展示，这里每行要能点。 */
+.lt-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.lt-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.lt-row:last-child { border-bottom: none; }
+.lt-row:first-child { padding-top: var(--sp-2); }
+
+.lt-row__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lt-row__name {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.4;
+}
+
+.lt-row__desc {
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+  line-height: 1.55;
+}
+
+.lt-row__path {
+  font-family: var(--font-read);
+  font-size: var(--fs-label);
+  color: var(--ink-3);
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.lt-row__acts {
+  display: flex;
+  gap: var(--sp-2);
+  flex: none;
+  align-items: center;
+}
+
+/* ---------- 产物目录的「自定义」编辑条 ----------
+ * 默认 hidden（靠 HTML hidden 属性，base.css 已有 [hidden]{display:none!important}），
+ * 点「更改」才展开 —— 四个目录同时摊开输入框会让人以为这是必填表单。 */
+.lt-diredit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0 var(--sp-3);
+  border-bottom: 1px solid var(--line);
+}
+
+/* ⚠️ 必须显式写这条。base.css 的 `[hidden]{display:none}` 没有 !important，
+ * 与本选择器特异性相同（都是 0,1,0），谁生效只看加载顺序 ——
+ * 一条 `display:flex` 就能把隐藏彻底吃掉，编辑条变成永远展开。
+ * 这里用 `.lt-diredit[hidden]`（0,2,0）稳稳压过，不依赖文件顺序。 */
+.lt-diredit[hidden] { display: none; }
+
+/* 展开时它上面那行不该再画一条分隔线（那是同一组的两半） */
+.lt-row:has(+ .lt-diredit:not([hidden])) { border-bottom: none; }
+.lt-diredit:last-child { border-bottom: none; }
+
+.lt-diredit .input {
+  flex: 1 1 320px;
+  /* .input 默认是等宽字体（链接输入用），路径里有中文，等宽会很别扭 */
+  font-family: var(--font-sans);
+}
+
+.lt-diredit__hint {
+  flex: 1 1 100%;
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+  line-height: 1.6;
+}
+
+/* ---------- 启动台 hero 上的小字补充 ----------
+ * .hero 已是既有组件，这里只加"工具身份"那一行的排布。 */
+.lt-ident {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  font-size: var(--fs-small);
+  color: rgba(255, 255, 255, .82);
+}
+
+.lt-ident__badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, .18);
+  font-size: var(--fs-label);
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
+/* ---------- 自检输出（等宽，贴 .log-box 的观感但独立） ----------
+ * 自检是"长文本原样呈现"，不能像日志那样带时间戳着色，
+ * 所以是独立的一小块，而不是复用 .log-line。 */
+.lt-out {
+  margin: 0;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-input);
+  background: var(--surface-sunken);
+  font-family: var(--font-read);
+  font-size: var(--fs-small);
+  line-height: 1.75;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.lt-out--ok { border-color: var(--brand-line); }
+.lt-out--bad { border-color: var(--danger); }
+
+/* ---------- 空/未连接态（如实说明，不假装可用） ---------- */
+.lt-offline {
+  padding: var(--sp-4) 0;
+}
+
+/* ---------- 窄屏：操作列掉到下一行，避免把名字挤成竖排 ---------- */
+@media (max-width: 720px) {
+  .lt-row {
+    flex-wrap: wrap;
+  }
+  .lt-row__acts {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .lt-tabs {
+    gap: var(--sp-1);
+  }
+  .lt-tab {
+    padding: 0 var(--sp-2);
+  }
+}

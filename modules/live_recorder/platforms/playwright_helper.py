@@ -85,6 +85,13 @@ class BrowserSession:
         self._last_blocked: bool = False
         # 最近一次抓取时页面正文片段，便于排查
         self._last_text: str = ""
+        # 最近一次抓取时的页面标题（接口失效时昵称的唯一线索）
+        self._last_title: str = ""
+        # 最近一次抓取时，由调用方提供的脚本读出的页面状态（JSON 可序列化）。
+        # 快手用它判断「页面正在播的是不是目标房间」：主播没开播时，直播间页面
+        # 仍然停在原地址、标题也还是主播名，但播放器自动切到**推荐位**的别人直播，
+        # 只靠地址/标题/正文都识别不出来（见 kuaishou.probe_stream_via_browser）。
+        self._last_state: Optional[dict] = None
 
     # ------------------------------------------------------------------ 生命周期
     def __enter__(self) -> "BrowserSession":
@@ -182,6 +189,7 @@ class BrowserSession:
         predicate: Optional[Callable[[str], bool]] = None,
         host_hints: Optional[tuple] = None,
         warmup_url: Optional[str] = None,
+        state_script: Optional[str] = None,
     ) -> List[str]:
         """打开直播间页面，监听网络请求，返回**按可信度排序**的候选播放地址。
 
@@ -204,6 +212,9 @@ class BrowserSession:
                                 以建立 Cookie 与站点状态，再打开目标直播间。
                                 实测可显著降低被判定为「异常访问」的概率。
                                 预热期间捕获的请求会被丢弃，不会污染结果。
+        state_script:           可选。一段在**关闭页面前**执行的 JS，返回值会存进
+                                ``page_state()``。用于校验「页面正在播的是不是目标
+                                房间」——地址和标题都可能不变，只有页面状态能分辨。
         """
         if self._context is None:
             raise PlaywrightUnavailable("浏览器会话尚未启动")
@@ -282,6 +293,22 @@ class BrowserSession:
             page_text = (page.inner_text("body") or "")[:1500]
         except Exception:  # noqa: BLE001
             page_text = ""
+        # 页面标题（形如「某某主播 - 快手直播」）是昵称的重要来源：
+        # 接口失效时它是唯一还能拿到的昵称线索。必须在 close 之前取。
+        try:
+            page_title = (page.title() or "")[:200]
+        except Exception:  # noqa: BLE001
+            page_title = ""
+        # 调用方自定义的页面状态（用于「正在播的是不是目标房间」这类判定）。
+        # 同样必须在 close 之前取。
+        page_state: Optional[dict] = None
+        if state_script:
+            try:
+                raw = page.evaluate(state_script)
+                if isinstance(raw, dict):
+                    page_state = raw
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("读取页面状态失败（不影响抓流）：%s", exc)
         try:
             page.close()
         except Exception:  # noqa: BLE001
@@ -291,6 +318,8 @@ class BrowserSession:
             self._last_detail = {url: rt for url, (rt, _) in found.items()}
         self._last_url = final_url
         self._last_text = page_text
+        self._last_title = page_title
+        self._last_state = page_state
         self._last_blocked = self._detect_blocked(final_url, page_text)
         if self._last_blocked:
             logger.warning(
@@ -324,6 +353,18 @@ class BrowserSession:
     def page_text(self) -> str:
         """最近一次抓取时的页面正文片段（排查用）。"""
         return self._last_text
+
+    def page_title(self) -> str:
+        """最近一次抓取时的页面标题（昵称的重要来源）。
+
+        典型形如 ``某某主播 - 快手直播`` / ``某某主播的直播间``，
+        由各平台解析器决定如何从中切出昵称。
+        """
+        return self._last_title
+
+    def page_state(self) -> Optional[dict]:
+        """最近一次抓取时由 ``state_script`` 读出的页面状态（没传/读失败则为 None）。"""
+        return self._last_state
 
     @staticmethod
     def _rank(found: Dict[str, tuple], host_hints: Optional[tuple]) -> List[str]:

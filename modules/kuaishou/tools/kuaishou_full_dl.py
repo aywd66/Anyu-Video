@@ -109,7 +109,8 @@ def main():
     from playwright.sync_api import sync_playwright
     # 优先复用扫码登录的持久化会话(登录态完整,含 HttpOnly Cookie)
     # 注意:快手风控对 headless 降权,必须用有头窗口(headless=False)才能保持登录态
-    profile = os.path.join(_find_root(), "runtime", "kuaishou-login-profile")
+    profile = (os.environ.get("KS_PROFILE")
+               or os.path.join(_find_root(), "runtime", "kuaishou-login-profile"))
     if not os.path.isdir(profile):
         profile = os.path.join(outdir, "login-profile")
     use_profile = os.path.isdir(profile)

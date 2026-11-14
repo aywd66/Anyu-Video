@@ -42,6 +42,39 @@ logger = setup_logger("BaseDownloader")
 # 15 分钟对正常大小的作品绰绰有余（真跑满说明这条已经没救了）。
 _VIDEO_ITEM_DEADLINE_S = 900
 
+# 失败自愈：批量任务跑完主轮后，把记成「失败」的作品再补跑几轮。
+#
+# 现场（2026-10-01 job bf863446014，8113 条主页任务）：12:15:00–12:16:42 的
+# 100 秒里 167 条同时失败（视频候选链全灭 + 图集首图失败同时发生），之后源站
+# 完全恢复、失败计数停住不动；事后用同一份 cookie 重跑这 167 条全部成功。
+# 这是源站/CDN 的短时封禁，不是作品问题。旧行为下这 167 条就永久留在「失败」
+# 里，用户只能自己发现再手动补 —— 而「能完全下载」正是这个自愈轮要保证的。
+#
+# 重跑前先等一段冷却（第 1 轮 20s、第 2 轮 40s、第 3 轮 60s…… 封顶 60s），
+# 给源站的封禁一个过去的机会；每轮都重新走 __should_download + 候选构造，
+# 拿到的是重新签名的新地址，而不是上一轮已经过期的那份。
+_FAILURE_RETRY_BASE_COOLDOWN_S = 20.0
+_FAILURE_RETRY_MAX_COOLDOWN_S = 60.0
+_FAILURE_RETRY_DEFAULT_PASSES = 2
+_FAILURE_RETRY_MAX_PASSES = 4
+
+# 模块级 sleep 别名：自愈轮的冷却在测试里不该真的睡满 60 秒（与
+# storage.file_manager._monotonic 同一个用法）。
+_sleep = asyncio.sleep
+
+
+def entry_status(entry: Any) -> str:
+    """批量结果的单条状态；任务抛错（gather 交回的异常对象）一律算失败。
+
+    ``paid`` = 付费/会员内容（CENC 加密，本地解不开）。它不是失败：重试多少遍
+    结果都一样，把它混进失败里会让一次批量被几十条注定下不来的作品染红。
+    """
+    if isinstance(entry, dict):
+        status = entry.get("status")
+        if status in ("success", "failed", "skipped", "paid"):
+            return status
+    return "failed"
+
 
 class ProgressReporter(Protocol):
     def update_step(self, step: str, detail: str = "") -> None: ...
@@ -57,9 +90,13 @@ class DownloadResult:
         self.success = 0
         self.failed = 0
         self.skipped = 0
+        # 付费/会员内容：抖音下发的是 CENC 密文，本地播放器解不开，属于
+        # **预期内下不来**。单列一桶，别混进 failed（见 entry_status）。
+        self.paid = 0
 
     def __str__(self):
-        return f"Total: {self.total}, Success: {self.success}, Failed: {self.failed}, Skipped: {self.skipped}"
+        return (f"Total: {self.total}, Success: {self.success}, Failed: {self.failed}, "
+                f"Skipped: {self.skipped}, Paid: {self.paid}")
 
 
 class BaseDownloader(ABC):
@@ -75,6 +112,7 @@ class BaseDownloader(ABC):
         queue_manager: Optional[QueueManager] = None,
         progress_reporter: Optional[ProgressReporter] = None,
         job_id: Optional[str] = None,
+        origin: Optional[str] = None,
     ):
         self.config = config
         self.api_client = api_client
@@ -89,6 +127,11 @@ class BaseDownloader(ABC):
         # Server job that spawned this downloader (empty for CLI runs);
         # written onto each aweme row for the History job cross-filter.
         self.job_id = job_id
+        # 这条作品是从哪种链接下下来的（由 DownloaderFactory 按 url_type 传入）。
+        # 只用于区分「主页批量」与「单作品链接」—— WebUI 的「关注」列表靠它
+        # 判断某位作者是不是用户真的关注过（详见 webui/bridge_server.py 的
+        # q_authors）。空串 = 来源未知，按「关注」处理，与升级前行为一致。
+        self.origin = origin or ""
         self.metadata_handler = MetadataHandler()
         self.transcript_manager = TranscriptManager(self.config, self.file_manager, self.database)
         self._local_aweme_ids: Optional[set[str]] = None
@@ -136,6 +179,25 @@ class BaseDownloader(ABC):
             self.progress_reporter.advance_item(status, detail)
         except Exception as exc:
             logger.debug("Progress advance_item failed: %s", exc)
+
+    def _progress_revise_items(
+        self, transitions: Dict[Tuple[str, str], int], detail: str = ""
+    ) -> None:
+        """把已记入的条目统计从一个桶挪到另一个桶（失败自愈轮专用）。
+
+        键是 ``(原状态, 新状态)``，值是条数；只挪统计、不推进已完成数。
+        reporter 是可选能力（协议只强制 update_step / set_item_total /
+        advance_item），没实现 ``revise_items`` 的替身直接跳过。
+        """
+        if not self.progress_reporter or not transitions:
+            return
+        revise = getattr(self.progress_reporter, "revise_items", None)
+        if not callable(revise):
+            return
+        try:
+            revise(transitions, detail)
+        except Exception as exc:
+            logger.debug("Progress revise_items failed: %s", exc)
 
     def _make_item_progress(self, aweme_id: Optional[str]):
         """构造单文件下载途中的字节进度回调（没有 reporter / id 时返回 None）。
@@ -271,6 +333,123 @@ class BaseDownloader(ABC):
         if isinstance(value, str):
             return value.strip().lower() in {"1", "true", "yes", "on"}
         return bool(value)
+
+    async def _known_aweme_ids(self, aweme_ids: List[str]) -> set:
+        """批量判定「这批作品是否已在本地库」——增量早停专用。
+
+        口径按用户规则：**文件名索引 ∪ 下载历史**（文件被移动/改名过的作品
+        仍在历史库里，算已下过）。注意这与 ``_should_download`` 略有差异：
+        那个是「要不要下这一条」，会受 redownload_missing_files 影响；这里是
+        「更早的是否整段都下过」，历史库有记录就该早停，否则每次都要把
+        几千条老作品重新扫一遍。
+        """
+        ids = [str(x) for x in aweme_ids if x]
+        if not ids:
+            return set()
+        await self._ensure_local_aweme_index()
+        known: set = set()
+        pending: List[str] = []
+        for aid in ids:
+            if self._is_locally_downloaded(aid):
+                known.add(aid)
+            else:
+                pending.append(aid)
+        if pending and self.database is not None:
+            try:
+                known.update(await self.database.is_downloaded_batch(pending))
+            except Exception as exc:  # noqa: BLE001 - 早停查询失败时宁可不早停
+                logger.warning("Early-stop download-history lookup failed: %s", exc)
+        return known
+
+    def _failure_retry_passes(self) -> int:
+        """失败自愈轮数；0 = 关闭自愈（只跑主轮）。"""
+        raw = self.config.get("failure_retry_passes", _FAILURE_RETRY_DEFAULT_PASSES)
+        try:
+            passes = int(raw)
+        except (TypeError, ValueError):
+            passes = _FAILURE_RETRY_DEFAULT_PASSES
+        return max(0, min(passes, _FAILURE_RETRY_MAX_PASSES))
+
+    async def _recover_failed_items(
+        self,
+        items: List[Dict[str, Any]],
+        statuses: List[str],
+        process: Callable[[Dict[str, Any]], Any],
+    ) -> None:
+        """把主轮失败的作品再补跑几轮，就地改写 ``statuses``。
+
+        ``process`` 必须是一个「同一套下载逻辑、但**不再上报条目进度**」的
+        可调用对象：重跑的是已经记过账的条目，再调一次 advance_item 会把
+        「已完成 / 8113」冲成 8280。统计的修正由 :meth:`_progress_revise_items`
+        在轮末一次性完成。
+        """
+        passes = self._failure_retry_passes()
+        if passes <= 0 or not items:
+            return
+
+        for attempt in range(1, passes + 1):
+            targets = [
+                index for index, status in enumerate(statuses) if status == "failed"
+            ]
+            if not targets:
+                return
+            cooldown = min(
+                _FAILURE_RETRY_BASE_COOLDOWN_S * attempt,
+                _FAILURE_RETRY_MAX_COOLDOWN_S,
+            )
+            self._progress_update_step(
+                "失败重试",
+                f"第 {attempt}/{passes} 轮 · {len(targets)} 条待补下 · 冷却 {cooldown:.0f}s",
+            )
+            logger.warning(
+                "Failure-recovery pass %d/%d: retrying %d item(s) after %.0fs cooldown",
+                attempt,
+                passes,
+                len(targets),
+                cooldown,
+            )
+            await _sleep(cooldown)
+            try:
+                retry_results = await self.queue_manager.download_batch(
+                    process, [items[index] for index in targets]
+                )
+            except Exception as exc:  # pragma: no cover — download_batch 本身不抛
+                logger.warning("Failure-recovery pass %d aborted: %s", attempt, exc)
+                return
+
+            transitions: Dict[Tuple[str, str], int] = {}
+            for index, entry in zip(targets, retry_results):
+                new_status = entry_status(entry)
+                if new_status == "failed":
+                    continue
+                key = ("failed", new_status)
+                transitions[key] = transitions.get(key, 0) + 1
+                statuses[index] = new_status
+
+            if not transitions:
+                logger.warning(
+                    "Failure-recovery pass %d/%d: all %d item(s) failed again",
+                    attempt,
+                    passes,
+                    len(targets),
+                )
+                self._progress_update_step(
+                    "失败重试",
+                    f"第 {attempt} 轮仍全部失败（源站可能还在拦）",
+                )
+                continue
+
+            recovered = sum(transitions.values())
+            self._progress_revise_items(
+                transitions, f"第 {attempt} 轮补下 {recovered}/{len(targets)} 条"
+            )
+            logger.warning(
+                "Failure-recovery pass %d/%d: recovered %d/%d item(s)",
+                attempt,
+                passes,
+                recovered,
+                len(targets),
+            )
 
     async def _ensure_local_aweme_index(self) -> None:
         """在工作线程中完成首次全库扫描建索引。
@@ -535,6 +714,27 @@ class BaseDownloader(ABC):
             comments_cfg,
         )
 
+    def _breaker(self):
+        """本任务的失败熔断闸门（FileManager 持有，全体 worker 共享）。"""
+        return getattr(self.file_manager, "breaker", None)
+
+    def _note_transport_failure(self) -> None:
+        """「这条作品的下载传输失败了」——喂给熔断闸门。
+
+        只在这几个**传输**失败点调用，内容层面的失败（没有可播地址、DRM
+        加密、媒体类型不支持）不在此列：那些是作品本身的问题，跟源站有没有
+        在拦我们无关，拿它们去冷却只会拖慢整批。
+        """
+        breaker = self._breaker()
+        if breaker is not None:
+            breaker.record_failure()
+
+    def _note_transport_success(self) -> None:
+        """这条作品完好落盘 —— 让熔断窗口归零。"""
+        breaker = self._breaker()
+        if breaker is not None:
+            breaker.record_success()
+
     async def _download_aweme_assets(
         self,
         aweme_data: Dict[str, Any],
@@ -544,7 +744,16 @@ class BaseDownloader(ABC):
         db_batch: Optional[List[Dict[str, Any]]] = None,
         author_sec_uid: Optional[str] = None,
         collection_dir: Optional[str] = None,
+        outcome: Optional[Dict[str, str]] = None,
     ) -> bool:
+        """下载一条作品的全部资产，成功返回 True。
+
+        ``outcome``：可选的「出参」字典。返回 False 时，若失败是**预期内**的
+        原因，会写入 ``outcome["status"]``（目前只有 ``"paid"``）与
+        ``outcome["note"]``。调用方据此把它记成「付费跳过」而不是「失败」——
+        付费作品的 ``download_addr`` 是 CENC 密文，重试一万次也解不开，
+        混进失败里只会让整批结果失真。
+        """
         # retry_executor 直接调本方法（不经过 _should_download），先在
         # 线程里把索引建好，避免成功后的 _mark_local_aweme_downloaded
         # 在事件循环里触发同步全库扫描。
@@ -585,6 +794,9 @@ class BaseDownloader(ABC):
                 video_candidates = self._build_video_url_candidates(aweme_data)
                 if not video_candidates:
                     logger.error("No playable video URL found for aweme %s", aweme_id)
+                    if outcome is not None and is_paid_content(aweme_data):
+                        outcome["status"] = "paid"
+                        outcome["note"] = "付费/会员内容，没有可下载的地址"
                     return False
                 video_candidates = await self._maybe_promote_original_candidate(
                     aweme_data, video_candidates, session
@@ -594,8 +806,14 @@ class BaseDownloader(ABC):
                 if not await self._download_video_with_fallback(
                     video_candidates, video_path, session, aweme_id=aweme_id
                 ):
+                    self._note_transport_failure()
                     return False
                 if not self._discard_if_encrypted(video_path, aweme_id):
+                    # 密文被删掉是**预期行为**（见 utils/paid_content.py）：
+                    # 告诉调用方这是付费内容，别记成「失败」。
+                    if outcome is not None:
+                        outcome["status"] = "paid"
+                        outcome["note"] = "付费/会员内容（CENC 加密，本地无法播放）"
                     return False
                 downloaded_files.append(video_path)
                 primary_media_downloaded = True
@@ -681,6 +899,7 @@ class BaseDownloader(ABC):
                         break
                 if not download_result:
                     logger.error(f"Failed downloading image {index} for aweme {aweme_id}")
+                    self._note_transport_failure()
                     return False
 
             for index, live_url in enumerate(image_live_urls, start=1):
@@ -694,6 +913,7 @@ class BaseDownloader(ABC):
                 )
                 if not success:
                     logger.error(f"Failed downloading live image {index} for aweme {aweme_id}")
+                    self._note_transport_failure()
                     return False
                 downloaded_files.append(live_path)
             primary_media_downloaded = True
@@ -775,6 +995,7 @@ class BaseDownloader(ABC):
                     order_cover_mirrors(cover_list if isinstance(cover_list, list) else [])
                 ),
                 "job_id": self.job_id or "",
+                "origin": self.origin or "",
             }
             # Caller may opt into batched DB writes by passing a list; we just
             # accumulate the record and let the caller commit them all at once.
@@ -828,6 +1049,9 @@ class BaseDownloader(ABC):
 
         if primary_media_downloaded:
             self._mark_local_aweme_downloaded(aweme_id)
+            # 主媒体完好落盘 = 源站此刻在正常服务我们，熔断窗口归零。
+            # 「跳过」不喂这里：跳过的是早就下过的作品，不代表源站现在通。
+            self._note_transport_success()
         logger.info("Downloaded selected assets for %s: %s (%s)", media_type, desc, aweme_id)
         return True
 
@@ -915,20 +1139,24 @@ class BaseDownloader(ABC):
         )
 
     def _discard_if_encrypted(self, video_path: Path, aweme_id: Optional[str]) -> bool:
-        """落盘的 mp4 若是 DRM 密文就删掉并判失败。
+        """落盘的 mp4 若是 DRM 密文就删掉并返回 False。
 
         付费作品的 ``download_addr`` 是 CENC 加密的全长正片，容器与 NAL
         分帧都正常（进度条能拖、时长正确），只有 slice 内容是密文，播放
         器一律花屏无声。密钥只由抖音授权接口下发，留着这份文件既占空间
         又会让人误以为下载成功。
+
+        ⚠️ 这里**不是故障**：调用方会把它记成「付费跳过」而不是「失败」
+        （见 ``_download_aweme_assets`` 的 ``outcome`` 出参），所以日志用
+        warning 而不是 error —— 用 error 会让用户以为工具坏了。
         """
         scheme = detect_mp4_encryption(video_path)
         if not scheme:
             return True
         self._log_download_error(
-            logger.error,
+            logger.warning,
             f"Aweme {aweme_id}: 下载到的是 {scheme.upper()} 加密流（付费/会员内容），"
-            f"本地无法播放，已删除 {video_path.name}",
+            f"本地无法播放，已删除 {video_path.name}（计为付费跳过，不算失败）",
         )
         video_path.unlink(missing_ok=True)
         return False

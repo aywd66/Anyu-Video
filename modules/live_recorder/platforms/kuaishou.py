@@ -103,6 +103,31 @@ class KuaishouParser(BaseLiveParser):
     # 播放地址 CDN 特征（用于浏览器抓取时的可信度排序）
     _CDN_HINTS = ("yximgs.com", "kwimgs.com", "gifshow.com", "kuaishou")
 
+    #: 读取直播间页面「正在播哪一路」的脚本。
+    #:
+    #: ⚠️ 这是「录到别人直播」的唯一可靠判据。快手主播**没开播**时，直播间页面
+    #: 不会跳走、标题也还是「某某-快手直播」、正文里也没有「未开播」字样（实测），
+    #: 但播放器会自动切到**推荐位**里别人的直播，并且照常拉流。
+    #: 于是地址校验（URL 仍含 room_id）和标题校验都通不了这个坑。
+    #: 页面状态里才有真相：``liveroom.playList[activeIndex]`` 是当前播放项，
+    #: 它的 ``author.id`` / ``isLiving`` / ``liveStream.id`` 才能说明是谁在播。
+    _LIVE_STATE_JS = """
+    () => {
+        const lr = (window.__INITIAL_STATE__ || {}).liveroom || {};
+        const list = lr.playList || [];
+        const idx = (typeof lr.activeIndex === 'number' && lr.activeIndex >= 0) ? lr.activeIndex : 0;
+        const cur = list[idx] || {};
+        const a = cur.author || {};
+        const ls = cur.liveStream || {};
+        return {
+            authorId: String(a.id || ''),
+            authorName: String(a.name || ''),
+            isLiving: !!cur.isLiving,
+            streamId: String(ls.id || ''),
+        };
+    }
+    """
+
     def __init__(self, config=None) -> None:
         super().__init__(config)
         # room_id -> (抓取时间, StreamInfo 或 None, 是否被风控)
@@ -118,6 +143,12 @@ class KuaishouParser(BaseLiveParser):
         self._reco_lock = threading.Lock()
         # 最近一次浏览器兜底是否被风控拦截（区别于「未开播」）
         self._last_probe_blocked = False
+        # 最近一次浏览器兜底为什么不算「在播」：页面在放别人的推荐位 / 主播未开播。
+        # 上层据此给出「未开播」而不是「未知」。
+        self._last_probe_reason = ""
+        # 浏览器兜底期间解析到的昵称：principalId -> nickname。
+        # 详情接口失效后，页面标题是唯一还能拿到的昵称线索。
+        self._browser_nickname: Dict[str, str] = {}
         # 已注入到 HTTP 会话的 Cookie（避免重复注入）
         self._applied_cookie = ""
 
@@ -177,6 +208,71 @@ class KuaishouParser(BaseLiveParser):
         if any(ext in lowered for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif")):
             return False
         return ".flv" in lowered or ".m3u8" in lowered or ".ts" in lowered
+
+    #: 页面标题里需要剥掉的站点后缀（从中提取昵称）
+    _TITLE_SUFFIXES = (
+        " - 快手直播",
+        "-快手直播",
+        " - 快手",
+        "_快手直播",
+        " | 快手直播",
+        "快手直播",
+        " - Kuaishou Live",
+        "- Kuaishou Live",
+        "Kuaishou Live",
+        " - Kuaishou",
+    )
+    #: 这些标题代表「未开播 / 已结束 / 错误页 / 仅站点名」，不能当昵称
+    _TITLE_REJECT_MARKERS = (
+        "快手直播",
+        " Kuaishou",
+        "登录",
+        "验证",
+        "出错",
+        "找不到",
+        "页面不存在",
+        "已结束",
+        "未开播",
+    )
+
+    @classmethod
+    def _nickname_from_title(cls, title: str) -> str:
+        """从页面标题里尽力切出主播昵称。
+
+        标题典型形如 ``某某主播 - 快手直播``。识别失败返回空串，
+        由上层决定回退命名（不要在这里编造昵称）。
+        """
+        text = (title or "").strip()
+        if not text:
+            return ""
+        # 先剥掉站点后缀（长后缀优先，避免残留短后缀）
+        for suffix in cls._TITLE_SUFFIXES:
+            if text.endswith(suffix):
+                text = text[: -len(suffix)].strip()
+                break
+        if not text:
+            return ""
+        if any(marker in text for marker in cls._TITLE_REJECT_MARKERS):
+            return ""
+        # 标题里常见的噪声：直播间/的主页 等尾巴
+        text = re.sub(r"(的直播间|直播间|的主页|直播中)\s*$", "", text).strip()
+        # 昵称不应包含 URL 或过长
+        if not text or "http" in text.lower() or len(text) > 60:
+            return ""
+        return text
+
+    #: 快手页面正文里「昵称」附近的标记，用于从正文兜底提取
+    @staticmethod
+    def _nickname_from_text(page_text: str) -> str:
+        """从页面正文里兜底提取昵称（标题不可用时的最后手段）。"""
+        text = page_text or ""
+        for pattern in (r"关注\s*\n\s*(.+)", r"(.{2,30})\s*\n\s*粉丝"):
+            match = re.search(pattern, text)
+            if match:
+                candidate = match.group(1).strip()
+                if 0 < len(candidate) <= 30 and "http" not in candidate.lower():
+                    return candidate
+        return ""
 
     #: 快手的画质枚举 -> 中文档位。用于把 ``qualityType`` 显示成可读文案。
     _QUALITY_TYPE_LABELS = {
@@ -415,9 +511,13 @@ class KuaishouParser(BaseLiveParser):
         entry = index.get(room_id)
         if entry is not None:
             room.status = LiveStatus.LIVE
-            room.nickname = entry.get("nickname") or ""
             room.title = entry.get("title") or ""
             room.note = "直播中"
+            # 推荐流的 author.name 偶尔为空；此时用浏览器兜底缓存里
+            # 已解析到的昵称补位（不额外发起请求）。
+            room.nickname = entry.get("nickname") or self.browser_nickname(room_id) or ""
+            if not room.nickname:
+                logger.debug("快手推荐流命中但 author.name 为空：%s", room_id)
             return room
 
         # 2) 旧详情接口
@@ -456,6 +556,9 @@ class KuaishouParser(BaseLiveParser):
         if info is not None:
             room.status = LiveStatus.LIVE
             room.note = "直播中（浏览器确认）"
+            # 浏览器兜底此前不回填昵称，导致「已确认在播但昵称仍为空」，
+            # 录制文件名只能退化成房间号。这里补上页面标题解析出的昵称。
+            room.nickname = self.browser_nickname(room.room_id) or room.nickname
             return room
 
         if self._last_probe_blocked:
@@ -472,7 +575,12 @@ class KuaishouParser(BaseLiveParser):
             return room
 
         room.status = LiveStatus.OFFLINE
-        room.note = "未开播（浏览器未捕获到直播流）"
+        if self._last_probe_reason:
+            # 说清楚「为什么不算在播」：主播没开播 / 页面在放推荐位。
+            # 不写这一句的话，用户只会看到「未开播」，看不出刚才是差点录错人。
+            room.note = f"未开播（{self._last_probe_reason}）"
+        else:
+            room.note = "未开播（浏览器未捕获到直播流）"
         return room
 
     def _fetch_room_payload(self, room_id: str) -> dict:
@@ -616,7 +724,9 @@ class KuaishouParser(BaseLiveParser):
                     f"快手房间 {room_id} 取流被风控拦截（页面提示「请求过快」"
                     f"或出现验证码），请调大轮询间隔后重试"
                 )
-            reason = self._browser_unavailable_reason or "浏览器未捕获到直播流（可能未开播）"
+            reason = (self._browser_unavailable_reason
+                      or (f"未开播：{self._last_probe_reason}" if self._last_probe_reason else "")
+                      or "浏览器未捕获到直播流（可能未开播）")
             raise PlatformError(f"快手房间 {room_id} 无法获取可用流地址：{reason}")
 
         # 按（高度, 码率）降序排列，取最接近目标档位的地址
@@ -742,7 +852,14 @@ class KuaishouParser(BaseLiveParser):
         2. **风控识别**：页面出现「请求过快」/验证码时，明确标记为风控
            （``_last_probe_blocked``），避免被上层误判为「未开播」。此时页面上
            可能仍在播放推荐位内容，若不拦截就会录到别人的直播；
-        3. **落地校验**：最终的页面地址必须仍属于目标房间，否则丢弃抓取结果。
+        3. **播的是谁**：读页面状态 ``liveroom.playList[activeIndex]``，
+           要求 ``author.id == room_id`` 且 ``isLiving`` 为真，并且只采信
+           ``liveStream.id`` 对得上的那一路地址。
+
+        ⚠️ 第 3 条是 2026-10-17 补的，因为前两条挡不住一种情况：主播**没开播**时，
+        直播间页面既不跳转、标题也不变、正文里没有「未开播」字样，但播放器会
+        自动切到推荐位里别人的直播并照常拉流。地址/标题/正文三项校验全部通过，
+        结果就是把别人的游戏直播录进了该作者的目录。
 
         返回 ``None`` 表示未抓到（未开播、被风控或浏览器不可用）。
         """
@@ -760,6 +877,8 @@ class KuaishouParser(BaseLiveParser):
         blocked = False
         landed = ""
         page_text = ""
+        page_title = ""
+        state: Optional[dict] = None
         try:
             with BrowserSession(
                 headless=True,
@@ -774,11 +893,14 @@ class KuaishouParser(BaseLiveParser):
                     host_hints=self._CDN_HINTS,
                     # 先访问首页建立会话状态（实测能明显降低风控概率）
                     warmup_url=self.HOME_URL,
+                    state_script=self._LIVE_STATE_JS,
                 )
                 cookies = session.cookies_dict()
                 blocked = session.page_blocked()
                 landed = session.final_url()
                 page_text = session.page_text()
+                page_title = session.page_title()
+                state = session.page_state()
         except PlaywrightUnavailable as exc:
             self._browser_unavailable_reason = (
                 f"浏览器兜底不可用（{exc}）。请执行："
@@ -796,6 +918,7 @@ class KuaishouParser(BaseLiveParser):
         # 浏览器可用，清掉不可用原因
         self._browser_unavailable_reason = ""
         self._last_probe_blocked = blocked
+        self._last_probe_reason = ""
 
         if blocked:
             logger.warning(
@@ -804,6 +927,41 @@ class KuaishouParser(BaseLiveParser):
                 (page_text or "")[:100],
             )
             urls = []
+
+        # ② 页面正在播的是谁 —— 比地址/标题更硬的一道校验。
+        #    主播没开播时页面会留在原地、标题也不变，只有 playList 能说明真相。
+        if urls and state:
+            playing_id = str(state.get("authorId") or "")
+            living = bool(state.get("isLiving"))
+            stream_id = str(state.get("streamId") or "")
+            if not living or (playing_id and playing_id != room_id):
+                if playing_id and playing_id != room_id:
+                    self._last_probe_reason = (
+                        f"页面在放推荐位里别人的直播（{state.get('authorName') or playing_id}），"
+                        "不是目标主播"
+                    )
+                else:
+                    self._last_probe_reason = "页面标记 isLiving=false"
+                logger.warning(
+                    "快手房间 %s %s，丢弃抓取结果（候选 %d 个）",
+                    room_id, self._last_probe_reason, len(urls),
+                )
+                urls = []
+            elif stream_id:
+                matched = [u for u in urls if stream_id in u]
+                if matched:
+                    urls = matched
+                else:
+                    # 有流，但一路都对不上本房间当前的 liveStream.id：
+                    # 宁可这一轮不录，也不能把别人的流写进作者目录。
+                    self._last_probe_reason = (
+                        f"抓到的流与房间当前 liveStream.id（{stream_id}）对不上"
+                    )
+                    logger.warning(
+                        "快手房间 %s %s，丢弃抓取结果（候选 %r）",
+                        room_id, self._last_probe_reason, [u[:80] for u in urls[:3]],
+                    )
+                    urls = []
 
         # 落地校验：页面若已跳转到别处（或被跳到验证页），抓到的流不可信
         if urls and landed and room_id not in landed:
@@ -831,6 +989,12 @@ class KuaishouParser(BaseLiveParser):
                 quality_label="browser",
                 headers=headers,
             )
+            # 顺手提取昵称：接口失效时页面标题是唯一的昵称线索。
+            # 落地校验通过后才采信，避免把跳转到的别的房间的标题当成本房间昵称。
+            nickname = self._nickname_from_title(page_title) or self._nickname_from_text(page_text)
+            if nickname:
+                self._browser_nickname[room_id] = nickname
+                logger.info("快手房间 %s 浏览器兜底解析到昵称：%s", room_id, nickname)
             logger.info(
                 "快手房间 %s 浏览器兜底成功（%s，共捕获 %d 个候选）",
                 room_id,
@@ -840,6 +1004,10 @@ class KuaishouParser(BaseLiveParser):
 
         self._browser_cache[room_id] = (time.monotonic(), info, blocked)
         return info
+
+    def browser_nickname(self, room_id: str) -> str:
+        """返回浏览器兜底期间解析到的昵称（无则空串）。"""
+        return self._browser_nickname.get(room_id, "")
 
     def capture_stream_via_browser(
         self, room_id: str, wait_seconds: float = 12.0

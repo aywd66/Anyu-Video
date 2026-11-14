@@ -31,6 +31,7 @@
     external: '<path d="M14 4.5h5.5V10"/><path d="M19.5 4.5 11 13"/><path d="M19.5 13.8v4.7c0 .9-.7 1.6-1.6 1.6H5.6c-.9 0-1.6-.7-1.6-1.6V6.1c0-.9.7-1.6 1.6-1.6h4.7"/>',
     close: '<path d="m6 6 12 12"/><path d="M18 6 6 18"/>',
     check: '<path d="m5 13 4.2 4.2L19 7"/>',
+    edit: '<path d="M14.5 5.5 18.5 9.5 8.5 19.5H4.5v-4z"/><path d="m13 7 4 4"/>',
     alert: '<path d="M12 3.8 2.8 19.8h18.4z"/><path d="M12 9.6v4.6"/><path d="M12 17.1v.2"/>',
     info: '<circle cx="12" cy="12" r="8.4"/><path d="M12 11.2v5"/><path d="M12 7.8v.2"/>',
     clock: '<circle cx="12" cy="12" r="8.4"/><path d="M12 7.2V12l3.1 1.9"/>',
@@ -67,6 +68,7 @@
     circleDot: '<circle cx="12" cy="12" r="8.4"/><circle cx="12" cy="12" r="2.6"/>',
     loader: '<circle cx="12" cy="12" r="8.4" stroke-dasharray="40 13" stroke-dashoffset="8"/>',
     stop: '<rect x="6.8" y="6.8" width="10.4" height="10.4" rx="1.4"/>',
+    power: '<path d="M12 3.8v7.4"/><path d="M7.2 6.6a7.4 7.4 0 1 0 9.6 0"/>',
     sort: '<path d="M8 5.5v13"/><path d="m4.8 15.4 3.2 3.1 3.2-3.1"/><path d="M16 18.5v-13"/><path d="m12.8 8.6 3.2-3.1 3.2 3.1"/>',
     shield: '<path d="M12 3.4 19 6.2v5.6c0 4.6-2.9 7.5-7 9.3-4.1-1.8-7-4.7-7-9.3V6.2z"/><path d="m9 11.8 2.2 2.2 3.8-3.8"/>',
     restart: '<path d="M5 12a7 7 0 1 1 1.8 4.7"/><path d="M4.6 12.6 5 17l4.3-.8"/>',
@@ -74,6 +76,7 @@
     key: '<circle cx="8" cy="15.5" r="3.6"/><path d="m10.7 12.8 8.8-8.8"/><path d="m15.5 8 2.6 2.6"/><path d="m18 5.5 2 2"/>',
     layers: '<rect x="4" y="4.5" width="16" height="6.2" rx="1.4"/><rect x="4" y="13.3" width="16" height="6.2" rx="1.4"/>',
     queueAdd: '<path d="M4 6.5h9"/><path d="M4 12h9"/><path d="M4 17.5h6"/><path d="M17 10v8"/><path d="M13 14h8"/>',
+    radio: '<rect x="3.5" y="5.5" width="17" height="13" rx="2.4"/><path d="M7.8 8.6h8.4"/><path d="m10.5 12.2 3 2.2-3 2.2z"/><path d="M4 21h16"/>',
     cat: '<path d="M7 4.5 8.8 8a5.4 5.4 0 0 1 6.4 0L16.9 4.5l1.2 4.9c.6 1 .9 2.1.9 3.2 0 3.6-3.1 6.4-7 6.4s-7-2.8-7-6.4c0-1.1.3-2.2.9-3.2z"/><path d="M9.6 11.4v.2"/><path d="M14.4 11.4v.2"/><path d="M10.6 14.6c.4.4.9.6 1.4.6s1-.2 1.4-.6"/>',
   };
 

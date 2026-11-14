@@ -50,6 +50,14 @@
   border-color: #FFFFFF;
   box-shadow: 0 0 0 3px rgba(255, 255, 255, .28);
 }
+/* 多行形态：一次能粘多个链接，框必须显示得下多行。
+ * 上面那条固定 height:42px 是给单行框的，这里必须解开，否则第二行看不见。 */
+.hero-paste__input--tall {
+  height: auto; min-height: 42px;
+  padding: 10px 14px;
+  line-height: 1.5;
+  resize: vertical;
+}
 .hero-paste__hint {
   position: relative; z-index: 1;
   display: flex; align-items: center; gap: 8px;
@@ -66,14 +74,15 @@
 .btn-hero-line { background: rgba(255, 255, 255, .14); color: var(--bb-invert); border: 1px solid rgba(255, 255, 255, .5); height: 42px; padding: 0 22px; }
 .btn-hero-line:hover { background: rgba(255, 255, 255, .24); }
 
-/* ---------- 环境健康卡 ---------- */
+/* ---------- 环境健康（去卡片化：细线分列的纯排版状态行） ---------- */
 .health-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .health-item {
   display: flex; gap: 12px; align-items: flex-start;
-  padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
-  transition: all var(--t-fast);
+  padding: 2px 0 2px 16px; border-left: 1px solid var(--line);
+  transition: border-color var(--t-fast);
 }
-.health-item:hover { border-color: var(--bb-hover-teal); background: var(--bb-primary-light); }
+.health-item:first-child { border-left: 0; padding-left: 0; }
+.health-item:hover { border-color: var(--brand-line); }
 .health-body { min-width: 0; }
 .health-name { font-size: 14px; font-weight: 600; color: var(--bb-heading); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .health-desc { font-size: 12px; color: var(--muted); line-height: 1.6; margin-top: 4px; }
@@ -102,22 +111,18 @@
 }
 .module-foot { margin-top: 18px; display: flex; gap: 10px; align-items: center; }
 
-/* ---------- 数据概览（Plan-C 统计卡） ---------- */
+/* ---------- 数据概览（去卡片化：细线分列的纯排版数字） ---------- */
 .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
 .stat-card {
-  position: relative; background: var(--panel); border-radius: var(--bb-r-card);
-  padding: 22px 24px; box-shadow: var(--bb-shadow-card); overflow: hidden;
-  transition: box-shadow var(--t-fast), transform var(--t-fast);
+  position: relative; padding: 2px 0 2px 16px; border-left: 1px solid var(--line);
 }
-.stat-card:hover { box-shadow: var(--bb-shadow-card-hover); transform: translateY(-2px); }
-.stat-icon {
-  position: absolute; right: 18px; top: 18px; width: 40px; height: 40px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center; font-size: 17px;
-}
-.si-teal { background: var(--bb-primary-light); color: var(--bb-primary); }
-.si-green { background: var(--bb-success-soft); color: var(--bb-success); }
-.si-red { background: var(--bb-danger-soft); color: var(--bb-danger); }
-.si-slate { background: var(--surface-sunken); color: var(--muted); }
+.stat-card:first-child { border-left: 0; padding-left: 0; }
+.stat-card:hover { box-shadow: none; transform: none; }
+.stat-icon { display: none; }
+.si-teal { color: var(--bb-primary); }
+.si-green { color: var(--bb-success); }
+.si-red { color: var(--bb-danger); }
+.si-slate { color: var(--muted); }
 .stat-value-big {
   font-family: var(--bb-font-num); font-size: 32px; font-weight: 700;
   line-height: 1.15; color: var(--bb-text-strong); letter-spacing: .5px;
@@ -147,19 +152,22 @@
 /* ---------- 响应式 ---------- */
 @media (max-width: 1279px) {
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
+  /* 两列网格下第二行首格也顶着左线，去掉 */
+  .stat-card:nth-child(odd) { border-left: 0; padding-left: 0; }
   .module-grid { grid-template-columns: repeat(2, 1fr); }
   .health-grid { grid-template-columns: 1fr; }
+  .health-item { border-left: 0; padding-left: 0; }
 }
 @media (max-width: 560px) {
   .stat-grid { grid-template-columns: 1fr; }
+  .stat-card { border-left: 0; padding-left: 0; }
 }
 @media (max-width: 375px) {
   .hero { padding: 26px 22px; }
   .hero h1 { font-size: 21px; }
   .stat-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
-  .stat-card { padding: 16px; }
+  .stat-card:nth-child(even) { border-left: 1px solid var(--line); padding-left: 12px; }
   .stat-value-big { font-size: 24px; }
-  .stat-icon { width: 30px; height: 30px; font-size: 14px; right: 12px; top: 12px; }
   .module-grid { grid-template-columns: 1fr; gap: 14px; }
   .hero-paste { flex-direction: column; align-items: stretch; gap: 8px; }
   .btn-hero, .btn-hero-line { width: 100%; }

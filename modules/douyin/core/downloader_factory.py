@@ -51,6 +51,10 @@ class DownloaderFactory:
             "queue_manager": queue_manager,
             "progress_reporter": progress_reporter,
             "job_id": job_id,
+            # 作品来源 = 本次链接的类型。CLI / 服务端 / 重试路径都从同一个
+            # DownloaderFactory 建下载器，所以在这里注入一次就全覆盖了；
+            # 不用每个调用点各自传（漏一处就会留下「来源不明」的作品）。
+            "origin": url_type,
         }
 
         if url_type == "video":

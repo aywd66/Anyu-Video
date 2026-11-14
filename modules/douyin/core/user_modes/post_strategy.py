@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -12,7 +14,47 @@ logger = setup_logger("PostUserModeStrategy")
 
 _POST_PAGE_TIMEOUT_SECONDS = 45.0
 _POST_PAGE_SIZE = 20
-_PostPageResult = Tuple[List[Dict[str, Any]], bool]
+_PostPageResult = Tuple[List[Dict[str, Any]], bool, bool]
+
+# ── 「作品列表接口正在风控」的持久化标记 ──────────────────────────────────
+# 现状（2026-10-23 实测）：`/aweme/v1/web/aweme/post/` 被接口级风控，返回 403；
+# 换成浏览器现取的 48 个新鲜 Cookie 依然 403 —— 不是登录态问题，换 Cookie 救不回来。
+# 每个作者任务都要先白试 3 次（1s + 2s 退避，约 3.5 秒）才发现必然失败。
+# 任务之间是独立进程，内存标记传不过去，所以落一个短 TTL 的文件标记：
+# 命中过就 30 分钟内直接走浏览器兜底（慢一点，但结果完全一样）。
+# 过期后自动重试接口 —— 风控解除后自动回到快路径，不需要人工干预。
+_POST_API_BLOCK_TTL_SECONDS = 1800
+_POST_API_BLOCK_MARKER = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    ".state",
+    "post_api_blocked.json",
+)
+
+
+def _post_api_blocked_remaining() -> int:
+    """接口风控冷却还剩几秒；0 = 没在冷却，照常走接口。"""
+    try:
+        with open(_POST_API_BLOCK_MARKER, "r", encoding="utf-8") as f:
+            until = float((json.load(f) or {}).get("until") or 0)
+    except Exception:
+        return 0
+    return max(0, int(until - time.time()))
+
+
+def _mark_post_api_blocked(reason: str) -> None:
+    try:
+        os.makedirs(os.path.dirname(_POST_API_BLOCK_MARKER), exist_ok=True)
+        payload = {
+            "until": time.time() + _POST_API_BLOCK_TTL_SECONDS,
+            "reason": str(reason)[:120],
+            "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        tmp = _POST_API_BLOCK_MARKER + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        os.replace(tmp, _POST_API_BLOCK_MARKER)
+    except Exception:  # 标记只是加速手段，写不进去不能影响主流程
+        pass
 
 
 def _log_page_response(
@@ -50,8 +92,15 @@ class PostUserModeStrategy(BaseUserModeStrategy):
             logger.error("API client missing get_user_post")
             return []
 
-        aweme_list, pagination_restricted = await self._collect_api_items(sec_uid, user_info)
+        aweme_list, pagination_restricted, early_stopped = await self._collect_api_items(
+            sec_uid, user_info
+        )
         if not pagination_restricted:
+            if not early_stopped:
+                # 「正常结束」也可能被静默截断（如空页被当成列表末尾），
+                # 结束前与主页作品总数对一次账，缺漏要留下 ERROR 证据。
+                # 增量早停是**故意**少扫（更早的已下过），不做对账。
+                self._verify_scan_total(aweme_list, user_info)
             return aweme_list
 
         self.downloader._progress_update_step("拉取作品列表", "分页受限，尝试浏览器回补")
@@ -76,7 +125,29 @@ class PostUserModeStrategy(BaseUserModeStrategy):
         max_cursor = raw_items_seen = page_number = candidate_count = 0
         number_limit = int(self.downloader.config.get("number", {}).get(self.mode_name, 0) or 0)
         time_boundary = self._time_boundary_for_config()
+        early_stop_limit = self._early_stop_limit()
+        consecutive_known = 0
         self.downloader._progress_update_step("拉取作品列表", "分页抓取中")
+
+        # 接口还在风控冷却里就别白试三次了，直接交给浏览器兜底。
+        remaining = _post_api_blocked_remaining()
+        if remaining > 0:
+            logger.warning(
+                "作品列表接口仍在风控冷却中（剩余 %s 秒），跳过接口直接走浏览器兜底",
+                remaining,
+            )
+            self.downloader._progress_update_step(
+                "拉取作品列表", f"接口风控冷却中（剩 {remaining}s），改用浏览器"
+            )
+            return aweme_list, True, False
+
+        # 增量早停要查本地索引：先在工作线程里建好（rglob 全库），
+        # 免得翻页循环里第一次判定时把事件循环卡住半秒。
+        if early_stop_limit:
+            try:
+                await self.downloader._ensure_local_aweme_index()
+            except Exception as exc:  # noqa: BLE001 — 建不起来就退化成「不早停」
+                logger.debug("Local index unavailable, early stop disabled: %s", exc)
 
         while True:
             request_cursor = max_cursor
@@ -88,12 +159,12 @@ class PostUserModeStrategy(BaseUserModeStrategy):
                 collected_count=len(aweme_list),
             )
             if page_data is None:
-                return aweme_list, True
+                return aweme_list, True, False
             page = self._normalize_page_data(page_data)
             page_items = self.select_items(page)
             raw_page_count = self._append_page_items(page, aweme_list)
             if raw_page_count == 0:
-                return aweme_list, self._empty_page_is_restricted(page, request_cursor)
+                return aweme_list, self._empty_page_is_restricted(page, request_cursor), False
             raw_items_seen += raw_page_count
             candidate_count += self._count_page_candidates(page_items)
             has_more = bool(page.get("has_more", False))
@@ -118,7 +189,29 @@ class PostUserModeStrategy(BaseUserModeStrategy):
             if should_stop:
                 if time_decision.should_stop and not pagination_restricted:
                     self._report_time_boundary_stop(page_number, raw_items_seen)
-                return aweme_list, pagination_restricted
+                return aweme_list, pagination_restricted, False
+            # 增量早停（接口能用的那条路）：**连续** N 条作品都已在本地库 →
+            # 更早的必然下过，立即停。注意不是「本页全中」：
+            # 作者一次连发几十条时前几页全是新的（没有跳过），必须继续翻到
+            # 出现跳过、且连续达到阈值（默认 2 屏 40 条）才停，否则会漏片。
+            if early_stop_limit:
+                consecutive_known = await self._advance_known_streak(
+                    page_items, consecutive_known
+                )
+                if consecutive_known >= early_stop_limit:
+                    self.downloader._progress_update_step(
+                        "拉取作品列表",
+                        f"增量早停：连续 {consecutive_known} 条已在本地，停止翻页",
+                    )
+                    logger.warning(
+                        "作品列表早停（接口分页）：连续 %s 条已在本地库（阈值 %s 条，"
+                        "共扫描 %s 条 / %s 页），更早的作品必然已下过",
+                        consecutive_known,
+                        early_stop_limit,
+                        raw_items_seen,
+                        page_number,
+                    )
+                    return aweme_list, False, True
 
     def _time_boundary_for_config(self) -> PostTimeBoundary:
         bounds_getter = getattr(self.downloader, "_time_range_bounds", None)
@@ -147,6 +240,99 @@ class PostUserModeStrategy(BaseUserModeStrategy):
         filtered = self._filter_pinned_items(items)
         filtered = self.downloader._filter_by_time(filtered)
         return len(self._filter_by_media_type(filtered))
+
+    async def _advance_known_streak(
+        self,
+        page_items: List[Dict[str, Any]],
+        streak: int,
+    ) -> int:
+        """把本页作品按列表顺序喂进「连续已知」计数（未知即归零）。
+
+        判定用 ``_known_aweme_ids``（本地文件名索引 + 下载历史库），与
+        ``_should_download`` 的「已下载」语义一致。
+        """
+        ids = [
+            str(item.get("aweme_id") or "")
+            for item in page_items
+            if not self._is_pinned(item)
+        ]
+        ids = [aweme_id for aweme_id in ids if aweme_id]
+        if not ids:
+            return streak
+        try:
+            known = await self.downloader._known_aweme_ids(ids)
+        except Exception as exc:  # noqa: BLE001 — 查询失败就当不知道，继续翻
+            logger.debug("Early-stop lookup failed, keep paging: %s", exc)
+            return streak
+        for aweme_id in ids:
+            streak = streak + 1 if aweme_id in known else 0
+        return streak
+
+    def _early_stop_limit(self) -> int:
+        """增量早停阈值（连续已知条数），0 = 关闭。
+
+        默认 40 = 2 屏（1 屏 = 20 条）。``increase=false``（强制重下）时
+        一律关闭 —— 用户既然要重下，就必须把整份列表扫全。
+        """
+        if not self._increase_enabled():
+            return 0
+        raw = self.downloader.config.get("browser_fallback", {}).get("early_stop_known", 40)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = 40
+        return max(0, value)
+
+    @staticmethod
+    def _is_pinned(item: Dict[str, Any]) -> bool:
+        value = item.get("is_top")
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def _increase_enabled(self) -> bool:
+        raw = self.downloader.config.get("increase", {})
+        if not isinstance(raw, dict):
+            return True
+        value = raw.get(self.mode_name, True)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def _verify_scan_total(
+        self,
+        aweme_list: List[Dict[str, Any]],
+        user_info: Dict[str, Any],
+    ) -> None:
+        """扫描数量与主页作品总数对账；用户主动设了数量上限、时间范围或
+        媒体类型筛选时，扫得少是预期行为，跳过校验。"""
+        number_limit = int(
+            self.downloader.config.get("number", {}).get(self.mode_name, 0) or 0
+        )
+        if number_limit > 0:
+            return
+        bounds_getter = getattr(self.downloader, "_time_range_bounds", None)
+        if callable(bounds_getter):
+            try:
+                if bounds_getter()[0]:
+                    return
+            except Exception:  # noqa: BLE001 - 对账失败不影响主流程
+                return
+        if self._media_type_filter_enabled():
+            return
+        try:
+            profile_count = int(user_info.get("aweme_count") or 0)
+        except (TypeError, ValueError):
+            return
+        deficit = profile_count - len(aweme_list)
+        if deficit > 2:
+            logger.error(
+                "作品扫描数量与主页不一致：实扫 %s 条，主页显示 %s 条（缺 %s 条），"
+                "翻页可能被风控静默截断，建议稍后重试或重新登录刷新 Cookie",
+                len(aweme_list),
+                profile_count,
+                deficit,
+            )
 
     def _report_time_boundary_stop(self, page_number: int, raw_items_seen: int) -> None:
         detail = f"已到达起始日期，提前结束翻页（检查 {page_number} 页，共 {raw_items_seen} 条）"
@@ -268,6 +454,8 @@ class PostUserModeStrategy(BaseUserModeStrategy):
                 "User post page empty at cursor=%s (status_code=0); will attempt browser fallback",
                 request_cursor,
             )
+            # 记下「接口在风控」，后续作者任务 30 分钟内直接走浏览器，不再白试。
+            _mark_post_api_blocked("empty page with status_code=0 at cursor=%s" % request_cursor)
         return restricted
 
     @staticmethod

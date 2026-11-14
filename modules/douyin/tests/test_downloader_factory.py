@@ -37,6 +37,11 @@ async def test_downloader_factory_routes_supported_types(tmp_path):
         assert isinstance(DownloaderFactory.create("user", **common), UserDownloader)
         assert isinstance(DownloaderFactory.create("collection", **common), MixDownloader)
         assert isinstance(DownloaderFactory.create("music", **common), MusicDownloader)
+        # 工厂必须把链接类型作为「作品来源」注给下载器 —— WebUI 的「关注」列表
+        # 就是靠它区分「主页批量」与「单作品链接」的。在工厂统一注入，是因为
+        # CLI / 服务端 / 重试三条路径都走这里，漏一处就会留下来源不明的作品。
+        assert DownloaderFactory.create("video", **common).origin == "video"
+        assert DownloaderFactory.create("user", **common).origin == "user"
     finally:
         await api_client.close()
 

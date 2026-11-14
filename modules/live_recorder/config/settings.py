@@ -69,6 +69,13 @@ class AppConfig:
     # ---- 存储 ----
     min_free_disk_gb: float = 10.0          # 磁盘剩余低于该值暂停全部录制
     convert_to_mp4: bool = False            # 录制完成后转封装为 MP4（-c copy 不重编码）
+    # 转封装成功后是否删除中间产物（FLV），即「只留 MP4」。
+    #
+    # 为什么默认 False：删除不可逆。转封装是 -c copy，理论上无损，但仍有
+    # 极小概率遇到源文件尾部索引不全、MP4 时长对不上等边缘情况；
+    # 默认保留一份 FLV 是给这种情况留退路。空间紧张的用户可显式打开。
+    # 仅在 convert_to_mp4=True 且 MP4 **确认有效**（存在且非空）时才生效。
+    keep_original_after_mp4: bool = True
 
     # ---- 环境 ----
     ffmpeg_path: str = "ffmpeg"             # ffmpeg 可执行文件路径，可填绝对路径

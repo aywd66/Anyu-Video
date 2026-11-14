@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin, urlparse
 
 import aiohttp
 
@@ -190,6 +190,24 @@ def _safe_error_text(exc: Exception) -> str:
     return text[:500]
 
 
+def _consecutive_known_tail(ids: List[str], known_ids) -> int:
+    """从列表尾部往前数，连续「已在本地」的作品数。
+
+    作品列表按发布时间倒序，所以尾部是**最老**的一段：尾部连续已知 = 已经
+    进到「早就下过」的区域了。中间夹一条未知就归零 —— 宁可多翻两屏，
+    也不要在断层处提前收手（那会静默漏片）。
+    """
+    if not ids or not known_ids:
+        return 0
+    count = 0
+    for aweme_id in reversed(ids):
+        if aweme_id in known_ids:
+            count += 1
+        else:
+            break
+    return count
+
+
 def _log_api_response(
     path: str,
     attempt: int,
@@ -232,6 +250,20 @@ _USER_AGENT_POOL = [
 ]
 
 
+# 页面内翻页之间的安全间隔（实测：0.8s 连发时第二页就开始回空壳）。
+# 抽成模块常量是为了测试能把它压到 0，否则一组用例要白等二十秒。
+_POST_PAGE_INTERVAL_SECONDS = 3.0
+
+# 命中 403/429 后的风控冷却时长（秒）。期间「作品列表」与「作品详情」两类接口
+# 直接跳过 HTTP、改走浏览器页面通道 —— 两者都有已验证可用的兜底路径。
+# 环境变量 DOUYIN_RISK_COOLDOWN 可覆盖（0 = 关闭冷却，恢复旧行为）。
+_RISK_COOLDOWN_SECONDS = 1800.0
+_RISK_COOLDOWN_COVERED_PREFIXES = (
+    "/aweme/v1/web/aweme/post/",
+    "/aweme/v1/web/aweme/detail/",
+)
+
+
 class DouyinAPIClient:
     BASE_URL = "https://www.douyin.com"
     LIVE_WEB_BASE_URL = "https://live.douyin.com"
@@ -267,6 +299,10 @@ class DouyinAPIClient:
         self._session: Optional[aiohttp.ClientSession] = None
         self._browser_post_aweme_items: Dict[str, Dict[str, Any]] = {}
         self._browser_post_stats: Dict[str, int] = {}
+        # 进程内风控冷却：命中 403/429 后，post/detail 接口在冷却期内直接跳过
+        # HTTP（它们都有浏览器兜底），不再白试 3 次退避 —— 单条详情 3 个 aid
+        # 候选 × 3 次重试 ≈ 37 秒，一次风控就能把批量任务拖慢十几分钟。
+        self._risk_blocked_until: float = 0.0
         selected_ua = random.choice(_USER_AGENT_POOL)
         self.headers = {
             "User-Agent": selected_ua,
@@ -352,7 +388,10 @@ class DouyinAPIClient:
             "round_trip_time": "200",
             "support_h265": "1",
             "support_dash": "1",
-            "uifid": "",
+            # 抖音的 ArgusSecurityPlugin 会校验 uifid：留空直接回
+            # ``403 Blocked by ArgusSecurityPlugin Uifid Not Found``。
+            # 取 Cookie 里的真值（仍缺 secsdk 签名，见 _collect_post_via_in_page_api）。
+            "uifid": str(self.cookies.get("UIFID") or ""),
             "msToken": ms_token,
         }
 
@@ -395,6 +434,36 @@ class DouyinAPIClient:
             logger.warning("Failed to generate a_bogus, fallback to X-Bogus: %s", exc)
             return None
 
+    # ---------- 风控冷却（403/429） ----------
+    @staticmethod
+    def _risk_cooldown_seconds() -> float:
+        raw = os.environ.get("DOUYIN_RISK_COOLDOWN", "")
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = _RISK_COOLDOWN_SECONDS
+        return max(0.0, value)
+
+    def _risk_cooldown_applies(self, path: str) -> bool:
+        if time.monotonic() >= self._risk_blocked_until:
+            return False
+        return str(path).startswith(_RISK_COOLDOWN_COVERED_PREFIXES)
+
+    def _enter_risk_cooldown(self, path: str, status: int) -> None:
+        seconds = self._risk_cooldown_seconds()
+        if seconds <= 0:
+            return
+        until = time.monotonic() + seconds
+        # 只延长不缩短：连续命中时冷却窗口取最晚的那个
+        self._risk_blocked_until = max(self._risk_blocked_until, until)
+        logger.warning(
+            "Douyin risk control hit (HTTP %s at %s)：%.0f 分钟内 post/detail 接口直接走"
+            "浏览器兜底，不再重试（环境变量 DOUYIN_RISK_COOLDOWN 可调）",
+            status,
+            path,
+            seconds / 60.0,
+        )
+
     async def _request_json(
         self,
         path: str,
@@ -407,6 +476,15 @@ class DouyinAPIClient:
         method: str = "GET",
         data: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        # 风控冷却期内：post/detail 接口直接返回空壳（调用方各自有浏览器兜底），
+        # 不再做 3 次带退避的重试。
+        if self._risk_cooldown_applies(path):
+            logger.info(
+                "Douyin API skipped by risk cooldown (%.0fs left): path=%s",
+                self._risk_blocked_until - time.monotonic(),
+                path,
+            )
+            return {}
         await self._ensure_session()
         method = method.upper()
         if method not in {"GET", "POST"}:
@@ -494,6 +572,10 @@ class DouyinAPIClient:
                             )
                         return result
                     risk_control_hit = response.status in _RISK_CONTROL_HTTP_STATUSES
+                    if risk_control_hit:
+                        # 记冷却：后续 post/detail 请求直接跳过 HTTP（省掉成串的
+                        # 1s+2s 退避；详情 3 个 aid 候选合计约 37 秒）。
+                        self._enter_risk_cooldown(path, response.status)
                     if response.status < 500 and not risk_control_hit:
                         log_fn = logger.info if suppress_error else logger.error
                         log_fn(
@@ -710,6 +792,20 @@ class DouyinAPIClient:
     async def get_video_detail(
         self, aweme_id: str, *, suppress_error: bool = False
     ) -> Optional[Dict[str, Any]]:
+        # 风控冷却期内不再白试 3 个 aid 候选 × 3 次重试（约 37 秒）：
+        # 单作品下载直接走页面内通道；批量回补路径直接跳过（那里通常已有
+        # 浏览器列表自带的详情，缺的极少）。
+        if self._risk_cooldown_applies("/aweme/v1/web/aweme/detail/"):
+            if suppress_error:
+                logger.info(
+                    "Detail API skipped by risk cooldown: aweme_id=%s", aweme_id
+                )
+                return None
+            logger.warning(
+                "Detail API skipped by risk cooldown, using in-page fallback: aweme_id=%s",
+                aweme_id,
+            )
+            return await self.get_video_detail_via_page(aweme_id)
         for aid in self._DETAIL_AID_CANDIDATES:
             params = await self._default_query()
             params.update(
@@ -746,7 +842,100 @@ class DouyinAPIClient:
             # aweme_detail is null without a filter reason — no retry needed
             break
 
+        # 页面内兜底：纯 HTTP 通道被 ArgusSecurityPlugin 拦截（403）时，改在
+        # 已登录页面里现签请求。仅对「要结果」的调用启用（suppress_error=False，
+        # 即单作品下载 / 失败重试路径）：批量回补路径传 suppress_error=True，
+        # 且通常已处于浏览器回补上下文中，绝不能再逐条开浏览器。
+        if not suppress_error:
+            logger.warning(
+                "Detail via HTTP exhausted (likely risk control), "
+                "trying in-page fallback: aweme_id=%s",
+                aweme_id,
+            )
+            try:
+                detail = await self.get_video_detail_via_page(aweme_id)
+            except Exception as exc:  # noqa: BLE001 - 兜底失败按原路径返回
+                logger.warning("In-page detail fallback failed for %s: %s", aweme_id, exc)
+                detail = None
+            if detail:
+                return detail
+
         return None
+
+    async def get_video_detail_via_page(self, aweme_id: str) -> Optional[Dict[str, Any]]:
+        """用「登录页 + 页面 SDK 现签」通道拉单条作品详情。
+
+        为什么存在：`/aweme/v1/web/aweme/detail/` 与作品列表一样被
+        ArgusSecurityPlugin 门禁，纯 aiohttp 请求会被 403（2026-10-18 实测，
+        单作品下载全挂）。页面里的 fetch 会被 webmssdk 自动补
+        ``uifid`` + ``x-secsdk-web-signature``，与 `_fetch_post_page_in_page`
+        同一条已经验证可用的通路。
+        """
+        try:
+            from playwright.async_api import async_playwright
+        except Exception as exc:
+            logger.warning("Playwright not available, page detail fallback disabled: %s", exc)
+            return None
+
+        query = urlencode(
+            {
+                "device_platform": "webapp",
+                "aid": "6383",
+                "channel": "channel_pc_web",
+                "aweme_id": str(aweme_id),
+            }
+        )
+        path = f"/aweme/v1/web/aweme/detail/?{query}"
+        started = time.monotonic()
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(
+                headless=False,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                ],
+            )
+            context = await browser.new_context(
+                user_agent=self.headers.get("User-Agent", ""),
+                locale="zh-CN",
+                viewport={"width": 1600, "height": 900},
+            )
+            cookies = self._browser_cookie_payload(include_login=True)
+            if cookies:
+                await context.add_cookies(cookies)
+            page = await context.new_page()
+            try:
+                await page.goto(
+                    f"{self.BASE_URL}/", wait_until="domcontentloaded", timeout=30000
+                )
+                await page.wait_for_function(
+                    "() => !!(window.byted_acrawler && window.byted_acrawler.frontierSign)",
+                    timeout=15000,
+                )
+                await page.wait_for_timeout(1000)
+                result = await page.evaluate(self._IN_PAGE_POST_FETCH_SCRIPT, path)
+                status = int((result or {}).get("status") or 0)
+                text = str((result or {}).get("text") or "")
+                if status != 200:
+                    logger.warning(
+                        "In-page detail fetch failed: status=%s body=%r",
+                        status,
+                        text[:120],
+                    )
+                    return None
+                data = json.loads(text)
+                detail = data.get("aweme_detail") if isinstance(data, dict) else None
+                if detail:
+                    logger.info(
+                        "In-page detail fallback ok: aweme_id=%s duration_ms=%s",
+                        aweme_id,
+                        int((time.monotonic() - started) * 1000),
+                    )
+                return detail if isinstance(detail, dict) else None
+            finally:
+                await context.close()
+                await browser.close()
 
     async def get_user_post(
         self, sec_uid: str, max_cursor: int = 0, count: int = 18
@@ -1346,42 +1535,105 @@ class DouyinAPIClient:
         return self._normalize_paged_response(raw, item_keys=["comments"])
 
     async def resolve_short_url(
-        self, short_url: str, *, timeout_seconds: float = 10.0
+        self,
+        short_url: str,
+        *,
+        timeout_seconds: float = 10.0,
+        attempts: int = 3,
     ) -> Optional[str]:
         """跟随短链 302，返回最终 URL。失败时返回 None。
 
-        单独设置较短超时（默认 10s），避免被目标站挂死后拖慢整轮下载。
+        ⚠️ 为什么要重试（2026-10-18）：``v.douyin.com`` 是 CDN 调度域名，一次解析
+        出 8 个 A 记录，实测**单次 302 就要 2.7~4.8 秒**，网络一抖就顶到 10 秒上限。
+        于是同一个链接会出现「点两次失败、第三次成功」——用户看到的是随机失败，
+        其实是超时卡在临界值上。现在改成「单次连接 6 秒超时 + 最多 3 次」，
+        抖动由重试吸收，而不是直接判死。
+
+        ⚠️ 为什么只读 302 的 Location（2026-10-18）：原来 ``allow_redirects=True``
+        会一路跟到 iesdouyin 的分享页，为了拿一个地址多下一整页 HTML，白白多花几秒。
+        短链正常都会回 302 + 绝对 Location；万一没有 Location（200 页面 / JS 跳转），
+        再回退到「跟随重定向」的老路径。
+
         HTTP 状态码 ≥ 400 时视为解析失败，返回 None 以避免把错误页 URL
         继续喂给下游 parser，从而在下游触发更隐晦的 "Unsupported URL" 噪声。
         """
-        try:
-            await self._ensure_session()
-            async with self._session.get(
-                short_url,
-                allow_redirects=True,
-                timeout=aiohttp.ClientTimeout(total=timeout_seconds),
-                proxy=self.proxy or None,
-            ) as response:
-                final_url = str(response.url)
-                if response.status >= 400:
-                    logger.warning(
-                        "Short URL resolved with HTTP %s (treated as failure): %s -> %s",
-                        response.status,
-                        safe_log_url(short_url),
-                        safe_log_url(final_url),
-                    )
-                    return None
-                return final_url
-        except asyncio.TimeoutError:
-            logger.error(
-                "Timeout resolving short URL after %.1fs: %s",
-                timeout_seconds,
-                safe_log_url(short_url),
-            )
+        await self._ensure_session()
+        if self._session is None:  # pragma: no cover - 防御
             return None
-        except Exception as e:
-            logger.error("Failed to resolve short URL: %s, error: %s", safe_log_url(short_url), e)
-            return None
+
+        timeout = aiohttp.ClientTimeout(total=timeout_seconds, sock_connect=6.0)
+        last_error = ""
+        for attempt in range(1, max(1, attempts) + 1):
+            try:
+                # ① 只取 302 的 Location：一次请求搞定，不下载最终页面。
+                #    实测「跟随重定向」要 2~5 秒（因为要下 iesdouyin 的整页 HTML），
+                #    只读 Location 是 0.1 秒级 —— 这才是 10 秒上限不再被打穿的关键。
+                current = short_url
+                for _hop in range(3):
+                    async with self._session.get(
+                        current,
+                        allow_redirects=False,
+                        timeout=timeout,
+                        proxy=self.proxy or None,
+                    ) as response:
+                        status = response.status
+                        location = (response.headers.get("Location") or "").strip()
+                        if status >= 400:
+                            logger.warning(
+                                "Short URL resolved with HTTP %s (treated as failure): %s",
+                                status,
+                                safe_log_url(short_url),
+                            )
+                            return None
+                        if not location:
+                            break            # 没有 Location，走下面的跟随重定向
+                        nxt = urljoin(current, location)
+                        # 仍是短链域名（链式短链）就再跳一跳；跳到正式页面就收工
+                        if "v.douyin.com" not in urlparse(nxt).netloc:
+                            return nxt
+                        current = nxt
+                else:
+                    return current           # 跳满 3 跳还在短链上，交给下游如实报错
+
+                # ② 没给 Location（200 页面或 JS 跳转）：回退到跟随重定向
+                async with self._session.get(
+                    short_url,
+                    allow_redirects=True,
+                    timeout=timeout,
+                    proxy=self.proxy or None,
+                ) as response:
+                    final_url = str(response.url)
+                    if response.status >= 400:
+                        logger.warning(
+                            "Short URL resolved with HTTP %s (treated as failure): %s -> %s",
+                            response.status,
+                            safe_log_url(short_url),
+                            safe_log_url(final_url),
+                        )
+                        return None
+                    return final_url
+            except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                if attempt < attempts:
+                    # 稍等再试：换一条 CDN 线路，通常第二次就通了
+                    await asyncio.sleep(0.8 * attempt)
+                    continue
+                logger.error(
+                    "Timeout resolving short URL after %.1fs x %d attempts: %s (%s)",
+                    timeout_seconds,
+                    attempt,
+                    safe_log_url(short_url),
+                    last_error,
+                )
+                return None
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "Failed to resolve short URL: %s, error: %s",
+                    safe_log_url(short_url),
+                    exc,
+                )
+                return None
+        return None
 
     async def save_user_homepage_screenshot(
         self,
@@ -1538,7 +1790,15 @@ class DouyinAPIClient:
         max_scrolls: int = 240,
         idle_rounds: int = 8,
         wait_timeout_seconds: int = 600,
+        known_ids: Optional[set] = None,
+        known_stop: int = 40,
     ) -> List[str]:
+        """浏览器兜底采集作品 id。
+
+        ``known_ids`` / ``known_stop``：增量更新时的早停依据 —— 列表按时间倒序，
+        尾部连续 ``known_stop`` 条都在 ``known_ids`` 里就停。不传（None）= 不限，
+        与旧行为一致（强制重下、首次全量搬运用）。
+        """
         browser_started = time.monotonic()
         try:
             from playwright.async_api import async_playwright
@@ -1594,7 +1854,9 @@ class DouyinAPIClient:
                 locale="zh-CN",
                 viewport={"width": 1600, "height": 900},
             )
-            cookies = self._browser_cookie_payload()
+            # 带上登录 Cookie：不带的话页面是**未登录**态，作品列表只会给第一页
+            # （响应里带 not_login_module / 「看更多最新作品」引导），翻页一律空壳。
+            cookies = self._browser_cookie_payload(include_login=True)
             logger.info(
                 "Browser fallback context ready: cookie_count=%s cookie_names=%s",
                 len(cookies),
@@ -1640,45 +1902,91 @@ class DouyinAPIClient:
 
             page.on("response", _on_response)
 
+            title = ""
+            page_ids: List[str] = []
             try:
+                # ① 先在**首页**上下文里翻接口分页。为什么不直接在用户主页里翻：
+                #    主页自己也会发同一条 /aweme/post/，把那几个 max_cursor 先消费掉，
+                #    我们再拿同一个游标去问就只换回一个空壳（只剩 status_code），
+                #    翻页会死在第二页。首页不碰这个接口。
+                #    页面 SDK 会替我们补 Argus 要的 uifid + x-secsdk-web-signature。
                 try:
-                    await page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    await page.goto(
+                        f"{self.BASE_URL}/", wait_until="domcontentloaded", timeout=timeout_ms
+                    )
+                    await page.wait_for_function(
+                        "() => !!(window.byted_acrawler && window.byted_acrawler.frontierSign)",
+                        timeout=15000,
+                    )
+                    await page.wait_for_timeout(3000)
                 except Exception as exc:
                     logger.warning(
-                        "Browser goto timeout or error, continue with current page state: %s",
-                        exc,
+                        "首页上下文准备失败（页面 SDK 可能未就绪）：%s", _safe_error_text(exc)
+                    )
+                if not page.is_closed():
+                    try:
+                        page_ids, page_items, page_pages = await self._collect_post_via_in_page_api(
+                            page, sec_uid, expected_count,
+                            known_ids=known_ids, known_stop=known_stop,
+                        )
+                    except Exception as exc:
+                        logger.warning("页面内接口分页失败：%s", _safe_error_text(exc))
+                        page_ids, page_items, page_pages = [], {}, 0
+                    if page_ids:
+                        post_api_page_hits += page_pages
+                        for aweme_id, item in page_items.items():
+                            post_api_aweme_items.setdefault(aweme_id, item)
+                        for aweme_id in page_ids:
+                            if aweme_id not in post_api_seen:
+                                post_api_seen.add(aweme_id)
+                                post_api_ids.append(aweme_id)
+                        _merge(page_ids)
+                    logger.warning(
+                        "页面内接口分页：pages=%s ids=%s items=%s",
+                        page_pages,
+                        len(page_ids),
+                        len(page_items),
                     )
 
-                title = ""
-                try:
-                    title = await page.title()
-                except Exception:
-                    pass
-                logger.info(
-                    "Browser fallback page state: title=%r url=%s",
-                    title[:200],
-                    safe_log_url(getattr(page, "url", target_url)),
-                )
-                if "验证码" in title:
-                    if headless:
+                # ② 接口分页拿不到才退回用户主页滚动抓 DOM。
+                if not page_ids:
+                    try:
+                        await page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    except Exception as exc:
                         logger.warning(
-                            "检测到验证码页面且当前为 headless 模式，无法人工验证。"
-                            "请将 browser_fallback.headless 设为 false。"
+                            "Browser goto timeout or error, continue with current page state: %s",
+                            exc,
                         )
-                        return []
-                    logger.warning("检测到验证码页面，请在浏览器中完成验证，程序会自动继续采集。")
-                    await self._wait_for_manual_verification(
-                        page, wait_timeout_seconds=wait_timeout_seconds
+
+                    try:
+                        title = await page.title()
+                    except Exception:
+                        pass
+                    logger.info(
+                        "Browser fallback page state: title=%r url=%s",
+                        title[:200],
+                        safe_log_url(getattr(page, "url", target_url)),
                     )
-                    if not page.is_closed():
-                        try:
-                            await page.goto(
-                                target_url,
-                                wait_until="domcontentloaded",
-                                timeout=timeout_ms,
+                    if "验证码" in title:
+                        if headless:
+                            logger.warning(
+                                "检测到验证码页面且当前为 headless 模式，无法人工验证。"
+                                "请将 browser_fallback.headless 设为 false。"
                             )
-                        except Exception as exc:
-                            logger.warning("Reload user page after verification failed: %s", exc)
+                            return []
+                        logger.warning("检测到验证码页面，请在浏览器中完成验证，程序会自动继续采集。")
+                        await self._wait_for_manual_verification(
+                            page, wait_timeout_seconds=wait_timeout_seconds
+                        )
+                        if not page.is_closed():
+                            try:
+                                await page.goto(
+                                    target_url,
+                                    wait_until="domcontentloaded",
+                                    timeout=timeout_ms,
+                                )
+                            except Exception as exc:
+                                logger.warning("Reload user page after verification failed: %s", exc)
 
                 try:
                     warmup_seconds = min(20, max(3, int(wait_timeout_seconds)))
@@ -1692,7 +2000,8 @@ class DouyinAPIClient:
                         await page.wait_for_timeout(1000)
 
                     stable_rounds = 0
-                    max_scroll_rounds = max(1, int(max_scrolls))
+                    # 接口分页已经拿到作品就不用再滚一遍（滚动只是给拿不到时的兜底）。
+                    max_scroll_rounds = 0 if ids else max(1, int(max_scrolls))
                     idle_stop_rounds = max(1, int(idle_rounds))
 
                     for _ in range(max_scroll_rounds):
@@ -1711,6 +2020,15 @@ class DouyinAPIClient:
 
                         if expected_count > 0 and len(ids) >= expected_count:
                             break
+                        if known_ids:
+                            tail_known = _consecutive_known_tail(ids, known_ids)
+                            if tail_known >= max(1, int(known_stop)):
+                                logger.warning(
+                                    "DOM 滚动早停：连续 %s 条已在本地（共 %s 条），停止滚动",
+                                    tail_known,
+                                    len(ids),
+                                )
+                                break
                         if expected_count <= 0 and stable_rounds >= idle_stop_rounds:
                             break
                 except Exception as exc:
@@ -1753,6 +2071,16 @@ class DouyinAPIClient:
             len(post_api_aweme_items),
             post_api_page_hits,
         )
+        if not selected_ids:
+            # 用 ERROR 记：任务日志默认只收 ERROR，否则「为什么失败」在任务中心
+            # 里完全看不见，只剩一句「下载失败或链接无效」。
+            logger.error(
+                "浏览器兜底未采集到任何作品：page_title=%r merged=%s post_pages=%s "
+                "（页面未正常加载，或抖音风控拦截）",
+                str(title)[:120],
+                len(ids),
+                post_api_page_hits,
+            )
         return selected_ids
 
     def pop_browser_post_aweme_items(self) -> Dict[str, Dict[str, Any]]:
@@ -1765,12 +2093,12 @@ class DouyinAPIClient:
         self._browser_post_stats = {}
         return stats
 
-    def _browser_cookie_payload(self) -> List[Dict[str, str]]:
+    def _browser_cookie_payload(self, *, include_login: bool = False) -> List[Dict[str, str]]:
         payload: List[Dict[str, str]] = []
         for name, value in self.cookies.items():
             if not name:
                 continue
-            if name in self._BROWSER_COOKIE_BLOCKLIST:
+            if not include_login and name in self._BROWSER_COOKIE_BLOCKLIST:
                 continue
             payload.append(
                 {
@@ -1780,6 +2108,179 @@ class DouyinAPIClient:
                 }
             )
         return payload
+
+    # 页面上下文里的作品列表请求脚本。`credentials: 'include'` 让 Cookie 跟过去，
+    # 页面 SDK（webmssdk / byted_acrawler）会自己补 uifid 与 x-secsdk-web-signature
+    # ——这正是纯 HTTP 通道补不出来的东西。
+    _IN_PAGE_POST_FETCH_SCRIPT = """
+    async (url) => {
+      const resp = await fetch(url, {
+        credentials: 'include',
+        headers: {'accept': 'application/json, text/plain, */*'},
+      });
+      const text = await resp.text();
+      return {status: resp.status, text: text.length > 4000000 ? text.slice(0, 4000000) : text};
+    }
+    """
+
+    async def _fetch_post_page_in_page(
+        self, page, sec_uid: str, max_cursor: int, count: int = 20
+    ) -> Dict[str, Any]:
+        """在已打开的抖音页面里发一次 ``/aweme/v1/web/aweme/post/``。
+
+        为什么不在 aiohttp 里发：ArgusSecurityPlugin 只认页面 SDK 现签的
+        ``uifid`` + ``x-secsdk-web-signature``，纯 HTTP 请求即使 a_bogus 正确
+        也会被 ``403 Blocked by ArgusSecurityPlugin ...`` 拦掉。页面里的 fetch
+        会被 webmssdk 挂钩自动补签名，所以这条通道才稳。
+        """
+        query = urlencode(
+            {
+                # 刻意用「最小参数集」——和网页自己发的那条一模一样。
+                # 多带 version_code / pc_client_type / browser_* 那套参数时，第一页
+                # 照常返回 20 条，但它给的 max_cursor 拿去请求第二页只会换回一个
+                # 空壳（只有 status_code），翻页直接死在这一步。
+                "device_platform": "webapp",
+                "aid": "6383",
+                "channel": "channel_pc_web",
+                "sec_user_id": sec_uid,
+                "max_cursor": str(int(max_cursor or 0)),
+                "locate_query": "false",
+                "show_live_replay_strategy": "1",
+                "need_time_list": "1",
+                "time_list_query": "0",
+                "whale_cut_token": "",
+                "cut_version": "1",
+                "publish_video_strategy_type": "2",
+                "count": str(int(count or 20)),
+            }
+        )
+        path = f"/aweme/v1/web/aweme/post/?{query}"
+        try:
+            result = await page.evaluate(self._IN_PAGE_POST_FETCH_SCRIPT, path)
+        except Exception as exc:
+            logger.warning("In-page post fetch raised: %s", _safe_error_text(exc))
+            return {}
+        status = int((result or {}).get("status") or 0)
+        text = str((result or {}).get("text") or "")
+        if status != 200:
+            logger.warning(
+                "In-page post fetch failed: status=%s body=%r", status, text[:120]
+            )
+            return {}
+        try:
+            data = json.loads(text)
+        except Exception:
+            logger.warning(
+                "In-page post fetch returned non-JSON: len=%s head=%r", len(text), text[:120]
+            )
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    async def _collect_post_via_in_page_api(
+        self,
+        page,
+        sec_uid: str,
+        expected_count: int = 0,
+        *,
+        max_pages: int = 300,
+        page_size: int = 20,
+        max_empty_retries: int = 5,
+        known_ids: Optional[set] = None,
+        known_stop: int = 40,
+    ) -> Tuple[List[str], Dict[str, Dict[str, Any]], int]:
+        """在页面里把作品列表翻完，返回 (ids, aweme_id→item, 实际页数)。
+
+        拿到的就是接口原始 ``aweme_list``，比滚动抓 DOM 更全、更快，而且
+        item 里带着详情，后面补详情时不必再打一次会被风控的 detail 接口。
+
+        页数上限必须能覆盖完整翻页：旧实现硬编码 60 页（60×20=1200 条），
+        作品数超过 1200 的主页会被拦腰截断——最老的一段永远扫不到，且
+        表现为「扫描 1192 / 主页 1794」这类静默缺漏。这里默认给 300 页
+        （6000 条）兜底，并在给出 expected_count 时按其推导更高的上限。
+        """
+        if expected_count and int(expected_count) > 0:
+            need_pages = -(-int(expected_count) // page_size) + 10
+            max_pages = max(int(max_pages), need_pages)
+        ids: List[str] = []
+        seen: set[str] = set()
+        items: Dict[str, Dict[str, Any]] = {}
+        pages = 0
+        cursor = 0
+        empty_retries = 0
+
+        while pages < max_pages:
+            data = await self._fetch_post_page_in_page(page, sec_uid, cursor, page_size)
+            aweme_items = (data or {}).get("aweme_list")
+            if not isinstance(aweme_items, list) or not aweme_items:
+                # 翻页过快时抖音会回一个只有 status_code 的空壳（不是真的没作品了）；
+                # 深翻页时也可能回非 JSON / HTTP 错误（此时 data 为空）。这些都可能是
+                # 限速而不是「到底了」，指数退避多试几次再放弃。
+                if empty_retries < max_empty_retries:
+                    empty_retries += 1
+                    delay = 3.0 * empty_retries
+                    logger.info(
+                        "页面内接口分页返回空页（可能限速），%.1fs 后重试第 %s/%s 次：cursor=%s",
+                        delay,
+                        empty_retries,
+                        max_empty_retries,
+                        cursor,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                break
+            empty_retries = 0
+            pages += 1
+            for item in aweme_items:
+                if not isinstance(item, dict):
+                    continue
+                aweme_id = str(item.get("aweme_id") or "")
+                if not aweme_id:
+                    continue
+                if aweme_id not in items:
+                    items[aweme_id] = item
+                if aweme_id not in seen:
+                    seen.add(aweme_id)
+                    ids.append(aweme_id)
+            if expected_count > 0 and len(ids) >= expected_count:
+                break
+            # 「一键更新」的早停：作品列表按时间倒序，从尾部数连续 known_stop 条
+            # 都已经在本地 → 更早的必然也下过，没必要再翻。
+            # ⚠️ 只在增量模式（increase=true）下由调用方传 known_ids；强制重下
+            #    （increase=false）时 known_ids 为 None，行为与旧版一致。
+            # ⚠️ 不按「看到第一条已知就停」：作者一次连发 60 条时，前三屏全是新的，
+            #    必须滚到出现已知的那一段并确认连续两屏都已知才停 —— 否则会漏片。
+            if known_ids:
+                tail_known = _consecutive_known_tail(ids, known_ids)
+                # ① 用户规则：连续 known_stop 条（默认两屏 40 条）都已在本地。
+                # ② 更硬的一条：**第一屏整屏都已下载** —— 列表按时间倒序，第一屏
+                #    就是最新的一批；它们全都已在本地，就证明没有新作品，不必再
+                #    翻第二屏（省掉一屏的 3 秒安全间隔）。
+                first_page_known = (
+                    pages == 1
+                    and len(ids) >= int(page_size)
+                    and all(aweme_id in known_ids for aweme_id in ids)
+                )
+                if tail_known >= max(1, int(known_stop)) or first_page_known:
+                    logger.warning(
+                        "作品列表早停：%s（连续已知 %s 条 / 共 %s 条 / %s 页），"
+                        "停止翻页（更早的作品必然已下过）",
+                        "第一屏整屏已下载" if first_page_known else "连续已知达阈值",
+                        tail_known,
+                        len(ids),
+                        pages,
+                    )
+                    break
+            if not int(data.get("has_more") or 0):
+                break
+            next_cursor = int(data.get("max_cursor") or 0)
+            if next_cursor <= 0 or next_cursor == cursor:
+                break
+            cursor = next_cursor
+            # 3s 是实测的安全间隔：0.8s 连发时第二页就开始回空壳。
+            # 抽成常量是为了测试能把等待压到 0（否则一组用例白等 20 秒）。
+            await asyncio.sleep(_POST_PAGE_INTERVAL_SECONDS)
+
+        return ids, items, pages
 
     async def _extract_aweme_ids_from_page(self, page) -> List[str]:
         script = """
